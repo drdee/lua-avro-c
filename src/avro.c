@@ -107,8 +107,17 @@ l_datum_discriminant(lua_State *L)
 static int
 l_datum_tostring(lua_State *L)
 {
-    /* TODO */
-    lua_pushstring(L, "TODO");
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+    char  *json_str = NULL;
+
+    if (avro_datum_to_json(l_datum->datum, l_datum->schema, 1, &json_str))
+    {
+        lua_pushliteral(L, "Error retrieving JSON encoding for datum");
+        return lua_error(L);
+    }
+
+    lua_pushstring(L, json_str);
+    free(json_str);
     return 1;
 }
 
@@ -991,9 +1000,7 @@ static int
 l_schema_new_datum(lua_State *L)
 {
     avro_schema_t  schema = lua_avro_get_schema(L, 1);
-    printf("--- schema is %s\n", avro_schema_type_name(schema));
     avro_datum_t  datum = avro_datum_from_schema(schema);
-    printf("--- new datum is %p\n", datum);
     lua_avro_push_datum(L, datum, schema);
     avro_datum_decref(datum);
     return 1;
