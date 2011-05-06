@@ -1079,7 +1079,7 @@ static const luaL_Reg  datum_methods[] =
 
 static const luaL_Reg  schema_methods[] =
 {
-    {"new_datum", l_schema_new_datum},
+    {"new_value", l_schema_new_datum},
     {"type", l_schema_type},
     {NULL, NULL}
 };
@@ -1088,7 +1088,7 @@ static const luaL_Reg  schema_methods[] =
 static const luaL_Reg  mod_methods[] =
 {
     {"Schema", l_schema_new},
-    {"Datum", l_datum_new},
+    {"Value", l_datum_new},
     {NULL, NULL}
 };
 
