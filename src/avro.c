@@ -108,7 +108,7 @@ l_datum_tostring(lua_State *L)
     LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
     char  *json_str = NULL;
 
-    if (avro_datum_to_json(l_datum->datum, l_datum->schema, 1, &json_str))
+    if (avro_datum_to_json(l_datum->datum, 1, &json_str))
     {
         lua_pushliteral(L, "Error retrieving JSON encoding for datum");
         return lua_error(L);
@@ -200,7 +200,7 @@ lua_avro_push_scalar_or_datum(lua_State *L,
 
       case AVRO_ENUM:
         {
-            const char  *name = avro_enum_get_name(datum, schema);
+            const char  *name = avro_enum_get_name(datum);
             lua_pushstring(L, name);
             return 1;
         }
@@ -412,8 +412,7 @@ get_union_branch(lua_State *L,
             return 1;
         }
 
-        avro_union_set_discriminant(l_datum->datum, l_datum->schema,
-                                    discriminant, &branch);
+        avro_union_set_discriminant(l_datum->datum, discriminant, &branch);
     }
 
     if (branch == NULL)
@@ -630,7 +629,7 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
       case AVRO_ENUM:
         {
             const char  *symbol = luaL_checkstring(L, val_index);
-            avro_enum_set_name(l_datum->datum, l_datum->schema, symbol);
+            avro_enum_set_name(l_datum->datum, symbol);
             lua_pushvalue(L, self_index);
             return 1;
         }
