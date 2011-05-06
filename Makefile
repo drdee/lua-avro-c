@@ -26,14 +26,14 @@ LDFLAGS=
 test-prereqs:
 	@echo Checking for GLIB...
 	@pkg-config glib-2.0 --exists --print-errors
-	@echo Checking for Gavro...
-	@pkg-config gavro --exists --print-errors
+	@echo Checking for Avro C library...
+	@pkg-config 'avro-c >= 1.5.0' --exists --print-errors
 
 GLIB_CFLAGS := $(shell pkg-config glib-2.0 gobject-2.0 --cflags)
 GLIB_LDFLAGS := $(shell pkg-config glib-2.0 gobject-2.0 --libs)
 
-GAVRO_CFLAGS := $(shell pkg-config gavro --cflags)
-GAVRO_LDFLAGS := $(shell pkg-config gavro --libs)
+AVRO_CFLAGS := $(shell pkg-config avro-c --cflags)
+AVRO_LDFLAGS := $(shell pkg-config avro-c --libs)
 
 # Build rules
 
@@ -46,16 +46,16 @@ QUIET_LINK =
 endif
 
 
-build: builddir build/gavro.so
+build: builddir build/avro.so
 
 builddir:
 	@mkdir -p $(BUILD_DIR)
 
-build/gavro.o: src/gavro.c
-	$(QUIET_CC)$(CC) -o $@ $(CFLAGS) $(GLIB_CFLAGS) -c $(GAVRO_CFLAGS) $<
+build/avro.o: src/avro.c
+	$(QUIET_CC)$(CC) -o $@ $(CFLAGS) $(GLIB_CFLAGS) -c $(AVRO_CFLAGS) $<
 
-build/gavro.so: build/gavro.o
-	$(QUIET_LINK)$(CC) -o $@ $(LIBFLAG) $(GLIB_LDFLAGS) $(GAVRO_LDFLAGS) $<
+build/avro.so: build/avro.o
+	$(QUIET_LINK)$(CC) -o $@ $(LIBFLAG) $(GLIB_LDFLAGS) $(AVRO_LDFLAGS) $<
 
 clean:
 	@echo Cleaning...
@@ -64,4 +64,4 @@ clean:
 install:
 	@echo Installing...
 	@install -d -m 0755 $(LUA_LIBDIR)
-	@install build/gavro.so $(LUA_LIBDIR)
+	@install build/avro.so $(LUA_LIBDIR)

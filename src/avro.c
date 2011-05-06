@@ -17,8 +17,6 @@
 #include <lua.h>
 #include <lualib.h>
 
-#include "lua-avro.h"
-
 
 /*-----------------------------------------------------------------------
  * Lua access — data
