@@ -57,6 +57,12 @@ build/avro.o: src/avro.c
 build/avro.so: build/avro.o
 	$(QUIET_LINK)$(CC) -o $@ $(LIBFLAG) $(GLIB_LDFLAGS) $(AVRO_LDFLAGS) $<
 
+test: build
+	@echo Testing in Lua...
+	@cd $(BUILD_DIR) && lua ../src/avro/test.lua
+	@echo Testing in LuaJIT...
+	@cd $(BUILD_DIR) && luajit ../src/avro/test.lua
+
 clean:
 	@echo Cleaning...
 	@rm -rf build

@@ -1093,6 +1093,10 @@ static const luaL_Reg  mod_methods[] =
 };
 
 
+#define set_avro_const2(s1, s2)    \
+    lua_pushinteger(L, AVRO_##s1); \
+    lua_setfield(L, -2, #s2);
+
 #define set_avro_const(s)         \
     lua_pushinteger(L, AVRO_##s); \
     lua_setfield(L, -2, #s);
@@ -1139,8 +1143,8 @@ luaopen_avro(lua_State *L)
     set_avro_const(BYTES);
     set_avro_const(DOUBLE);
     set_avro_const(FLOAT);
-    set_avro_const(INT32);
-    set_avro_const(INT64);
+    set_avro_const2(INT32, INT);
+    set_avro_const2(INT64, LONG);
     set_avro_const(NULL);
     set_avro_const(STRING);
 
