@@ -263,7 +263,8 @@ get_array_element(lua_State *L,
     if ((index < 1) || (index > avro_array_size(l_datum->datum)))
     {
         lua_pushnil(L);
-        return 1;
+        lua_pushliteral(L, "Index out of bounds");
+        return 2;
     }
 
     avro_datum_t  element_datum = NULL;
@@ -316,7 +317,8 @@ get_map_datum(lua_State *L,
         else
         {
             lua_pushnil(L);
-            return 1;
+            lua_pushliteral(L, "Map element doesn't exist");
+            return 2;
         }
     }
 
@@ -353,7 +355,8 @@ get_record_field(lua_State *L,
     if (field_datum == NULL)
     {
         lua_pushnil(L);
-        return 1;
+        lua_pushliteral(L, "Record field doesn't exist");
+        return 2;
     }
 
     avro_schema_t  field_schema =
@@ -410,7 +413,8 @@ get_union_branch(lua_State *L,
         if (branch_schema == NULL)
         {
             lua_pushnil(L);
-            return 1;
+            lua_pushliteral(L, "Union branch doesn't exist");
+            return 2;
         }
 
         avro_union_set_discriminant(l_datum->datum, discriminant, &branch);
@@ -419,7 +423,8 @@ get_union_branch(lua_State *L,
     if (branch == NULL)
     {
         lua_pushnil(L);
-        return 1;
+        lua_pushstring(L, avro_strerror());
+        return 2;
     }
 
     if (coerce_scalar)
@@ -506,13 +511,7 @@ static int
 l_datum_get(lua_State *L)
 {
     LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-
-    if (!get_subdatum(L, l_datum, 2, false, true))
-    {
-        lua_pushnil(L);
-    }
-
-    return 1;
+    return get_subdatum(L, l_datum, 2, false, true);
 }
 
 
