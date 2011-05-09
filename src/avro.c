@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include <avro.h>
+#include <avro/consumer.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -917,6 +918,68 @@ l_datum_iterate(lua_State *L)
 
 
 /**
+ * Encode an Avro value using the given resolver.
+ */
+
+static int
+l_datum_encode(lua_State *L)
+{
+    static avro_consumer_t  *encoding_consumer = NULL;
+    static avro_consumer_t  *sizeof_consumer = NULL;
+    static char  static_buf[65536];
+
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+
+    if (encoding_consumer == NULL) {
+        encoding_consumer = avro_encoding_consumer_new();
+    }
+
+    if (sizeof_consumer == NULL) {
+        sizeof_consumer = avro_sizeof_consumer_new();
+    }
+
+    size_t  size = 0;
+    avro_consume_datum(l_datum->datum, sizeof_consumer, &size);
+
+    int  result;
+    char  *buf;
+    bool  free_buf;
+
+    if (size <= sizeof(static_buf)) {
+        buf = static_buf;
+        free_buf = false;
+    } else {
+        const char  *buf = malloc(size);
+        if (buf == NULL) {
+            lua_pushnil(L);
+            lua_pushstring(L, "Out of memory");
+            return 2;
+        }
+        free_buf = true;
+    }
+
+    avro_writer_t  writer = avro_writer_memory(buf, size);
+    result = avro_consume_datum(l_datum->datum, encoding_consumer, writer);
+    avro_writer_free(writer);
+
+    if (result) {
+        if (free_buf) {
+            free(buf);
+        }
+        lua_pushnil(L);
+        lua_pushstring(L, avro_strerror());
+        return 2;
+    }
+
+    lua_pushlstring(L, buf, size);
+    if (free_buf) {
+        free(buf);
+    }
+    return 1;
+}
+
+
+/**
  * Finalizes an AvroDatum instance.
  */
 
@@ -1061,6 +1124,107 @@ l_schema_new(lua_State *L)
 
 
 /*-----------------------------------------------------------------------
+ * Lua access — resolvers
+ */
+
+/**
+ * The string used to identify the AvroResolver class's metatable in the
+ * Lua registry.
+ */
+
+#define MT_AVRO_RESOLVER "avro:AvroResolver"
+
+typedef struct _LuaAvroResolver
+{
+    avro_consumer_t  *resolver;
+} LuaAvroResolver;
+
+
+int
+lua_avro_push_resolver(lua_State *L, avro_consumer_t *resolver)
+{
+    LuaAvroResolver  *l_resolver;
+
+    l_resolver = lua_newuserdata(L, sizeof(LuaAvroResolver));
+    l_resolver->resolver = resolver;
+    luaL_getmetatable(L, MT_AVRO_RESOLVER);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+
+avro_consumer_t *
+lua_avro_get_resolver(lua_State *L, int index)
+{
+    LuaAvroResolver  *l_resolver = luaL_checkudata(L, index, MT_AVRO_RESOLVER);
+    return l_resolver->resolver;
+}
+
+
+/**
+ * Creates a new AvroResolver for the given schemas.
+ */
+
+static int
+l_resolver_new(lua_State *L)
+{
+    avro_schema_t  writer_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  reader_schema = lua_avro_get_schema(L, 2);
+    avro_consumer_t  *resolver = avro_resolver_new(writer_schema, reader_schema);
+    if (resolver == NULL) {
+        lua_pushnil(L);
+        lua_pushstring(L, avro_strerror());
+        return 2;
+    } else {
+        lua_avro_push_resolver(L, resolver);
+        return 1;
+    }
+}
+
+
+/**
+ * Finalizes an AvroResolver instance.
+ */
+
+static int
+l_resolver_gc(lua_State *L)
+{
+    LuaAvroResolver  *l_resolver = luaL_checkudata(L, 1, MT_AVRO_RESOLVER);
+    if (l_resolver->resolver != NULL)
+    {
+        avro_consumer_free(l_resolver->resolver);
+        l_resolver->resolver = NULL;
+    }
+    return 0;
+}
+
+
+/**
+ * Decode an Avro value using the given resolver.
+ */
+
+static int
+l_resolver_decode(lua_State *L)
+{
+    LuaAvroResolver  *l_resolver = luaL_checkudata(L, 1, MT_AVRO_RESOLVER);
+    size_t  size = 0;
+    const char  *buf = luaL_checklstring(L, 2, &size);
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 3, MT_AVRO_DATUM);
+
+    avro_reader_t  reader = avro_reader_memory(buf, size);
+    if (avro_consume_binary(reader, l_resolver->resolver, l_datum->datum)) {
+        lua_pushnil(L);
+        lua_pushstring(L, avro_strerror());
+        return 2;
+    }
+
+    avro_reader_free(reader);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+
+/*-----------------------------------------------------------------------
  * Lua access — module
  */
 
@@ -1068,6 +1232,7 @@ static const luaL_Reg  datum_methods[] =
 {
     {"append", l_datum_append},
     {"discriminant", l_datum_discriminant},
+    {"encode", l_datum_encode},
     {"get", l_datum_get},
     {"iterate", l_datum_iterate},
     {"scalar", l_datum_scalar},
@@ -1085,8 +1250,16 @@ static const luaL_Reg  schema_methods[] =
 };
 
 
+static const luaL_Reg  resolver_methods[] =
+{
+    {"decode", l_resolver_decode},
+    {NULL, NULL}
+};
+
+
 static const luaL_Reg  mod_methods[] =
 {
+    {"Resolver", l_resolver_new},
     {"Schema", l_schema_new},
     {"Value", l_datum_new},
     {NULL, NULL}
@@ -1134,6 +1307,16 @@ luaopen_avro(lua_State *L)
 
     luaL_newmetatable(L, MT_ITERATOR);
     lua_pushcfunction(L, iterator_gc);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
+    /* AvroResolver metatable */
+
+    luaL_newmetatable(L, MT_AVRO_RESOLVER);
+    lua_createtable(L, 0, sizeof(resolver_methods) / sizeof(luaL_reg) - 1);
+    luaL_register(L, NULL, resolver_methods);
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_resolver_gc);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
