@@ -35,20 +35,16 @@
 typedef struct _LuaAvroDatum
 {
     avro_datum_t  datum;
-    avro_schema_t  schema;
 } LuaAvroDatum;
 
 
 int
-lua_avro_push_datum(lua_State *L,
-                    avro_datum_t datum,
-                    avro_schema_t schema)
+lua_avro_push_datum(lua_State *L, avro_datum_t datum)
 {
     LuaAvroDatum  *l_datum;
 
     l_datum = lua_newuserdata(L, sizeof(LuaAvroDatum));
     l_datum->datum = avro_datum_incref(datum);
-    l_datum->schema = avro_schema_incref(schema);
     luaL_getmetatable(L, MT_AVRO_DATUM);
     lua_setmetatable(L, -2);
     return 1;
@@ -92,8 +88,9 @@ l_datum_discriminant(lua_State *L)
     }
 
     int  discriminant = avro_union_discriminant(l_datum->datum);
+    avro_schema_t  union_schema = avro_datum_get_schema(l_datum->datum);
     avro_schema_t  branch =
-        avro_schema_union_branch(l_datum->schema, discriminant);
+        avro_schema_union_branch(union_schema, discriminant);
     lua_pushstring(L, avro_schema_type_name(branch));
     return 1;
 }
@@ -131,7 +128,6 @@ l_datum_tostring(lua_State *L)
 static int
 lua_avro_push_scalar_or_datum(lua_State *L,
                               avro_datum_t datum,
-                              avro_schema_t schema,
                               bool require_scalar)
 {
     switch (avro_typeof(datum))
@@ -224,7 +220,7 @@ lua_avro_push_scalar_or_datum(lua_State *L,
 
         else
         {
-            lua_avro_push_datum(L, datum, schema);
+            lua_avro_push_datum(L, datum);
             return 1;
         }
     }
@@ -240,8 +236,7 @@ static int
 l_datum_scalar(lua_State *L)
 {
     LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-    return lua_avro_push_scalar_or_datum
-        (L, l_datum->datum, l_datum->schema, true);
+    return lua_avro_push_scalar_or_datum(L, l_datum->datum, true);
 }
 
 
@@ -270,18 +265,14 @@ get_array_element(lua_State *L,
     avro_datum_t  element_datum = NULL;
     avro_array_get(l_datum->datum, index-1, &element_datum);
 
-    avro_schema_t  element_schema =
-        avro_schema_array_items(l_datum->schema);
-
     if (coerce_scalar)
     {
-        return lua_avro_push_scalar_or_datum
-            (L, element_datum, element_schema, false);
+        return lua_avro_push_scalar_or_datum(L, element_datum, false);
     }
 
     else
     {
-        lua_avro_push_datum(L, element_datum, element_schema);
+        lua_avro_push_datum(L, element_datum);
         return 1;
     }
 }
@@ -301,7 +292,6 @@ get_map_datum(lua_State *L,
               bool can_create,
               bool coerce_scalar)
 {
-    avro_schema_t  element_schema = avro_schema_map_values(l_datum->schema);
     avro_datum_t  element_datum = NULL;
     avro_map_get(l_datum->datum, key, &element_datum);
 
@@ -309,6 +299,8 @@ get_map_datum(lua_State *L,
     {
         if (can_create)
         {
+            avro_schema_t  map_schema = avro_datum_get_schema(l_datum->datum);
+            avro_schema_t  element_schema = avro_schema_map_values(map_schema);
             element_datum = avro_datum_from_schema(element_schema);
             avro_map_set(l_datum->datum, key, element_datum);
             avro_datum_decref(element_datum);
@@ -324,13 +316,12 @@ get_map_datum(lua_State *L,
 
     if (coerce_scalar)
     {
-        return lua_avro_push_scalar_or_datum
-            (L, element_datum, element_schema, false);
+        return lua_avro_push_scalar_or_datum(L, element_datum, false);
     }
 
     else
     {
-        lua_avro_push_datum(L, element_datum, element_schema);
+        lua_avro_push_datum(L, element_datum);
         return 1;
     }
 }
@@ -359,18 +350,14 @@ get_record_field(lua_State *L,
         return 2;
     }
 
-    avro_schema_t  field_schema =
-        avro_schema_record_field_get(l_datum->schema, field_name);
-
     if (coerce_scalar)
     {
-        return lua_avro_push_scalar_or_datum
-            (L, field_datum, field_schema, false);
+        return lua_avro_push_scalar_or_datum(L, field_datum, false);
     }
 
     else
     {
-        lua_avro_push_datum(L, field_datum, field_schema);
+        lua_avro_push_datum(L, field_datum);
         return 1;
     }
 }
@@ -394,47 +381,41 @@ get_union_branch(lua_State *L,
 {
     int  discriminant;
     avro_datum_t  branch;
-    avro_datum_t  branch_schema;
 
     if (strcmp(field_name, "_") == 0)
     {
         discriminant = avro_union_discriminant(l_datum->datum);
         branch = avro_union_current_branch(l_datum->datum);
-        branch_schema = avro_schema_union_branch
-            (l_datum->schema, discriminant);
-
     }
 
     else
     {
-        branch_schema = avro_schema_union_branch_by_name
-            (l_datum->schema, &discriminant, field_name);
+        avro_schema_t  union_schema = avro_datum_get_schema(l_datum->datum);
+        avro_schema_t  branch_schema =
+            avro_schema_union_branch_by_name
+            (union_schema, &discriminant, field_name);
 
-        if (branch_schema == NULL)
-        {
+        if (branch_schema == NULL) {
             lua_pushnil(L);
-            lua_pushliteral(L, "Union branch doesn't exist");
+            lua_pushstring(L, avro_strerror());
             return 2;
         }
 
-        avro_union_set_discriminant(l_datum->datum, discriminant, &branch);
-    }
-
-    if (branch == NULL)
-    {
-        lua_pushnil(L);
-        lua_pushstring(L, avro_strerror());
-        return 2;
+        if (avro_union_set_discriminant(l_datum->datum, discriminant, &branch)) {
+            lua_pushnil(L);
+            lua_pushstring(L, avro_strerror());
+            return 2;
+        }
     }
 
     if (coerce_scalar)
     {
-        return lua_avro_push_scalar_or_datum(L, branch, branch_schema, false);
+        return lua_avro_push_scalar_or_datum(L, branch, false);
     }
 
     else
     {
-        lua_avro_push_datum(L, branch, branch_schema);
+        lua_avro_push_datum(L, branch);
         return 1;
     }
 }
@@ -764,10 +745,11 @@ l_datum_append(lua_State *L)
         return lua_error(L);
     }
 
-    avro_schema_t  element_schema = avro_schema_array_items(l_datum->schema);
+    avro_schema_t  array_schema = avro_datum_get_schema(l_datum->datum);
+    avro_schema_t  element_schema = avro_schema_array_items(array_schema);
     avro_datum_t  element = avro_datum_from_schema(element_schema);
     avro_array_append_datum(l_datum->datum, element);
-    lua_avro_push_datum(L, element, element_schema);
+    lua_avro_push_datum(L, element);
     avro_datum_decref(element);
 
     if (nargs == 2)
@@ -802,19 +784,17 @@ l_datum_append(lua_State *L)
 typedef struct _Iterator
 {
     avro_datum_t  datum;
-    avro_schema_t  element_schema;
     unsigned int  next_index;
 } Iterator;
 
 #define MT_ITERATOR "sawmill:AvroDatum:iterator"
 
 static void
-create_iterator(lua_State *L, avro_datum_t datum, avro_schema_t element_schema)
+create_iterator(lua_State *L, avro_datum_t datum)
 {
     lua_newuserdata(L, sizeof(Iterator));
     Iterator  *state = lua_touserdata(L, -1);
     state->datum = avro_datum_incref(datum);
-    state->element_schema = avro_schema_incref(element_schema);
     state->next_index = 0;
     luaL_getmetatable(L, MT_ITERATOR);
     lua_setmetatable(L, -2);
@@ -828,11 +808,6 @@ iterator_gc(lua_State *L)
     {
         avro_datum_decref(state->datum);
         state->datum = NULL;
-    }
-    if (state->element_schema != NULL)
-    {
-        avro_schema_decref(state->element_schema);
-        state->element_schema = NULL;
     }
     return 0;
 }
@@ -856,7 +831,7 @@ iterate_array(lua_State *L)
     avro_datum_t  element = NULL;
     avro_array_get(state->datum, state->next_index, &element);
     lua_pushinteger(L, state->next_index+1);
-    lua_avro_push_scalar_or_datum(L, element, state->element_schema, false);
+    lua_avro_push_scalar_or_datum(L, element, false);
 
     state->next_index++;
     return 2;
@@ -884,7 +859,7 @@ iterate_map(lua_State *L)
     avro_map_get(state->datum, key, &element);
 
     lua_pushstring(L, key);
-    lua_avro_push_scalar_or_datum(L, element, state->element_schema, false);
+    lua_avro_push_scalar_or_datum(L, element, false);
 
     state->next_index++;
     return 2;
@@ -898,7 +873,7 @@ l_datum_iterate(lua_State *L)
     if (is_avro_array(l_datum->datum))
     {
         lua_pushcfunction(L, iterate_array);
-        create_iterator(L, l_datum->datum, l_datum->schema);
+        create_iterator(L, l_datum->datum);
         lua_pushnil(L);
         return 3;
     }
@@ -906,7 +881,7 @@ l_datum_iterate(lua_State *L)
     if (is_avro_map(l_datum->datum))
     {
         lua_pushcfunction(L, iterate_map);
-        create_iterator(L, l_datum->datum, l_datum->schema);
+        create_iterator(L, l_datum->datum);
         lua_pushnil(L);
         return 3;
     }
@@ -991,11 +966,6 @@ l_datum_gc(lua_State *L)
         avro_datum_decref(l_datum->datum);
         l_datum->datum = NULL;
     }
-    if (l_datum->schema != NULL)
-    {
-        avro_datum_decref(l_datum->schema);
-        l_datum->schema = NULL;
-    }
     return 0;
 }
 
@@ -1060,7 +1030,7 @@ l_schema_new_datum(lua_State *L)
 {
     avro_schema_t  schema = lua_avro_get_schema(L, 1);
     avro_datum_t  datum = avro_datum_from_schema(schema);
-    lua_avro_push_datum(L, datum, schema);
+    lua_avro_push_datum(L, datum);
     avro_datum_decref(datum);
     return 1;
 }
