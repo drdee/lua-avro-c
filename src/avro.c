@@ -891,15 +891,17 @@ l_datum_iterate(lua_State *L)
 }
 
 
+static avro_consumer_t  *encoding_consumer = NULL;
+static avro_consumer_t  *sizeof_consumer = NULL;
+
 /**
- * Encode an Avro value using the given resolver.
+ * Encode an Avro value using the binary encoding.  Returns the result
+ * as a Lua string.
  */
 
 static int
 l_datum_encode(lua_State *L)
 {
-    static avro_consumer_t  *encoding_consumer = NULL;
-    static avro_consumer_t  *sizeof_consumer = NULL;
     static char  static_buf[65536];
 
     LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
@@ -949,6 +951,65 @@ l_datum_encode(lua_State *L)
     if (free_buf) {
         free(buf);
     }
+    return 1;
+}
+
+
+/**
+ * Return the length of the binary encoding of the value.
+ */
+
+static int
+l_datum_encoded_size(lua_State *L)
+{
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+
+    if (sizeof_consumer == NULL) {
+        sizeof_consumer = avro_sizeof_consumer_new();
+    }
+
+    size_t  size = 0;
+    avro_consume_datum(l_datum->datum, sizeof_consumer, &size);
+
+    lua_pushinteger(L, size);
+    return 1;
+}
+
+
+/**
+ * Encode an Avro value using the binary encoding.  The result is
+ * placed into the given memory region, which is provided as a light
+ * user data and a size.  There's no safety checking here; to make it
+ * easier to not include this function in sandboxes, it's exposes as a
+ * global function in the "avro" package, and not as a method of the
+ * AvroValue class.
+ */
+
+static int
+l_datum_encode_raw(lua_State *L)
+{
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+    if (!lua_islightuserdata(L, 2)) {
+        return luaL_error(L, "Destination buffer should be a light userdata");
+    }
+    void  *buf = lua_touserdata(L, 2);
+    size_t  size = luaL_checkinteger(L, 3);
+
+    if (encoding_consumer == NULL) {
+        encoding_consumer = avro_encoding_consumer_new();
+    }
+
+    avro_writer_t  writer = avro_writer_memory(buf, size);
+    int  result = avro_consume_datum(l_datum->datum, encoding_consumer, writer);
+    avro_writer_free(writer);
+
+    if (result) {
+        lua_pushboolean(L, false);
+        lua_pushstring(L, avro_strerror());
+        return 2;
+    }
+
+    lua_pushboolean(L, true);
     return 1;
 }
 
@@ -1202,6 +1263,7 @@ static const luaL_Reg  datum_methods[] =
     {"append", l_datum_append},
     {"discriminant", l_datum_discriminant},
     {"encode", l_datum_encode},
+    {"encoded_size", l_datum_encoded_size},
     {"get", l_datum_get},
     {"iterate", l_datum_iterate},
     {"scalar", l_datum_scalar},
@@ -1231,6 +1293,7 @@ static const luaL_Reg  mod_methods[] =
     {"Resolver", l_resolver_new},
     {"Schema", l_schema_new},
     {"Value", l_datum_new},
+    {"raw_encode_value", l_datum_encode_raw},
     {NULL, NULL}
 };
 
