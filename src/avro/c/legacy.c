@@ -1242,13 +1242,15 @@ l_resolver_decode(lua_State *L)
     LuaAvroDatum  *l_datum = luaL_checkudata(L, 3, MT_AVRO_DATUM);
 
     avro_reader_t  reader = avro_reader_memory(buf, size);
-    if (avro_consume_binary(reader, l_resolver->resolver, l_datum->datum)) {
+    int rc = avro_consume_binary(reader, l_resolver->resolver, l_datum->datum);
+    avro_reader_free(reader);
+
+    if (rc != 0) {
         lua_pushnil(L);
         lua_pushstring(L, avro_strerror());
         return 2;
     }
 
-    avro_reader_free(reader);
     lua_pushboolean(L, true);
     return 1;
 }
@@ -1308,7 +1310,7 @@ static const luaL_Reg  mod_methods[] =
 
 
 int
-luaopen_avro(lua_State *L)
+luaopen_avro_c_legacy(lua_State *L)
 {
     /* AvroSchema metatable */
 

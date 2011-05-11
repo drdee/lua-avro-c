@@ -1,6 +1,6 @@
 all: test-prereqs build
 
-.PHONY: all test-prereqs build builddir clean install
+.PHONY: all test-prereqs build builddir build-lua clean install
 
 # How verbose shall we be?
 
@@ -39,29 +39,42 @@ AVRO_LDFLAGS := $(shell pkg-config avro-c --libs)
 
 ifeq (,$(V))
 QUIET_CC   = @echo '   ' CC $@;
+QUIET_CP   = @echo '   ' CP $@;
 QUIET_LINK = @echo '   ' LINK $@;
 else
 QUIET_CC   =
+QUIET_CP   =
 QUIET_LINK =
 endif
 
 
-build: builddir build/avro.so
+build: builddir build-lua build/avro/c/legacy.so
+
+build-lua: build/avro.lua build/avro/test.lua build/avro/c/ffi.lua
+
+build/avro.lua: src/avro.lua
+	$(QUIET_CP)cp src/avro.lua $(BUILD_DIR)
+
+build/avro/test.lua: src/avro/test.lua
+	$(QUIET_CP)cp src/avro/test.lua $(BUILD_DIR)/avro
+
+build/avro/c/ffi.lua: src/avro/c/ffi.lua
+	$(QUIET_CP)cp src/avro/c/ffi.lua $(BUILD_DIR)/avro/c
 
 builddir:
-	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)/avro/c
 
-build/avro.o: src/avro.c
+build/avro/c/legacy.o: src/avro/c/legacy.c
 	$(QUIET_CC)$(CC) -o $@ $(CFLAGS) $(GLIB_CFLAGS) -c $(AVRO_CFLAGS) $<
 
-build/avro.so: build/avro.o
+build/avro/c/legacy.so: build/avro/c/legacy.o
 	$(QUIET_LINK)$(CC) -o $@ $(LIBFLAG) $(GLIB_LDFLAGS) $(AVRO_LDFLAGS) $<
 
 test: build
 	@echo Testing in Lua...
-	@cd $(BUILD_DIR) && lua ../src/avro/test.lua
+	@cd $(BUILD_DIR) && lua avro/test.lua
 	@echo Testing in LuaJIT...
-	@cd $(BUILD_DIR) && luajit ../src/avro/test.lua
+	@cd $(BUILD_DIR) && luajit avro/test.lua
 
 clean:
 	@echo Cleaning...
@@ -69,5 +82,11 @@ clean:
 
 install:
 	@echo Installing...
+	@install -d -m 0755 $(LUA_SHAREDIR)
+	@install -d -m 0755 $(LUA_SHAREDIR)/avro
+	@install -d -m 0755 $(LUA_SHAREDIR)/avro/c
+	@install build/avro.lua $(LUA_SHAREDIR)
+	@install build/avro/test.lua $(LUA_SHAREDIR)/avro
+	@install build/avro/c/ffi.lua $(LUA_SHAREDIR)/avro/c
 	@install -d -m 0755 $(LUA_LIBDIR)
-	@install build/avro.so $(LUA_LIBDIR)
+	@install build/avro/c/legacy.so $(LUA_LIBDIR)

@@ -10,6 +10,32 @@
 local A = require "avro"
 
 ------------------------------------------------------------------------
+-- Helpers
+
+-- The following function is from [1], and is MIT/X11-licensed.
+-- [1] http://snippets.luacode.org/snippets/Deep_Comparison_of_Two_Values_3
+
+function deepcompare(t1,t2,ignore_mt)
+   local ty1 = type(t1)
+   local ty2 = type(t2)
+   if ty1 ~= ty2 then return false end
+   -- non-table types can be directly compared
+   if ty1 ~= 'table' and ty2 ~= 'table' then return t1 == t2 end
+   -- as well as tables which have the metamethod __eq
+   local mt = getmetatable(t1)
+   if not ignore_mt and mt and mt.__eq then return t1 == t2 end
+   for k1,v1 in pairs(t1) do
+      local v2 = t2[k1]
+      if v2 == nil or not deepcompare(v1,v2) then return false end
+   end
+   for k2,v2 in pairs(t2) do
+      local v1 = t1[k2]
+      if v1 == nil or not deepcompare(v1,v2) then return false end
+   end
+   return true
+end
+
+------------------------------------------------------------------------
 -- Schema:type()
 
 do
@@ -31,6 +57,48 @@ do
    test_prim("long", A.LONG)
    test_prim("null", A.NULL)
    test_prim("string", A.STRING)
+end
+
+------------------------------------------------------------------------
+-- Arrays
+
+do
+   local function test_array(prim_type, expected)
+      local schema = A.Schema([[{"type": "array", "items": "]]..prim_type..[["}]])
+      local array = schema:new_value()
+      for _,val in ipairs(expected) do
+         array:append(val)
+      end
+      local actual = {}
+      for _,element in array:iterate() do
+         table.insert(actual, element)
+      end
+      assert(deepcompare(actual, expected))
+   end
+
+   test_array("int", { 1,2,3,4 })
+   test_array("string", { "", "a", "hello", "world!" })
+end
+
+------------------------------------------------------------------------
+-- Maps
+
+do
+   local function test_map(prim_type, expected)
+      local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
+      local map = schema:new_value()
+      for key,val in pairs(expected) do
+         map:set(key, val)
+      end
+      local actual = {}
+      for key,element in map:iterate() do
+         actual[key] = element
+      end
+      assert(deepcompare(actual, expected))
+   end
+
+   test_map("int", { a=1,b=2,c=3,d=4 })
+   test_map("string", { a="", b="a", c="hello", d="world!" })
 end
 
 ------------------------------------------------------------------------

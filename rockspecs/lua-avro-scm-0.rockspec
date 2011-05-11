@@ -25,11 +25,14 @@ external_dependencies = {
 build = {
    type = "builtin",
    modules = {
-      avro = {
-         sources = {"src/avro.c"},
+      avro = "src/avro.lua",
+      ["avro.test"] = "src/avro/test.lua",
+      ["avro.c.legacy"] = {
+         sources = {"src/avro/c/legacy.c"},
          libraries = {"avro"},
          incdirs = {"$(AVRO_INCDIR)"},
          libdirs = {"$(AVRO_LIBDIR)"},
       },
+      ["avro.c.ffi"] = "src/avro/c/ffi.lua",
    },
 }
