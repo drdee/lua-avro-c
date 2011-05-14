@@ -38,7 +38,7 @@ else
 LIBFLAG=-shared
 endif
 BUILD_DIR=build
-CFLAGS= -g -O2 -Wall -Werror
+CFLAGS= -g -O2 -Wall -Werror -fPIC
 LDFLAGS=
 
 ifeq (,$(USE_LUAROCKS))
