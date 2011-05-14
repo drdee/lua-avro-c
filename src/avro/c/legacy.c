@@ -925,7 +925,7 @@ l_datum_encode(lua_State *L)
         buf = static_buf;
         free_buf = false;
     } else {
-        const char  *buf = malloc(size);
+        buf = malloc(size);
         if (buf == NULL) {
             lua_pushnil(L);
             lua_pushstring(L, "Out of memory");
