@@ -64,7 +64,8 @@ end
 
 do
    local function test_array(prim_type, expected)
-      local schema = A.Schema([[{"type": "array", "items": "]]..prim_type..[["}]])
+      local items_schema = A.Schema([[{"type": "]]..prim_type..[["}]])
+      local schema = A.ArraySchema(items_schema)
       local array = schema:new_value()
       for _,val in ipairs(expected) do
          array:append(val)

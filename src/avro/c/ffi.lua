@@ -219,6 +219,9 @@ int
 avro_record_get(const avro_datum_t datum, const char *name, avro_datum_t *value);
 
 avro_schema_t
+avro_schema_array(const avro_schema_t items);
+
+avro_schema_t
 avro_schema_array_items(avro_schema_t schema);
 
 void
@@ -312,6 +315,12 @@ function Schema(json)
    local rc = avro.avro_schema_from_json(json, json_len, schema, schema_error)
    if rc ~= 0 then avro_error() end
    return LuaAvroSchema(schema[0])
+end
+
+function ArraySchema(items)
+   local schema = avro.avro_schema_array(items.schema)
+   if schema == nil then avro_error() end
+   return LuaAvroSchema(schema)
 end
 
 LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)

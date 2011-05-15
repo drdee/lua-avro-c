@@ -1153,6 +1153,25 @@ l_schema_new(lua_State *L)
 }
 
 
+/**
+ * Creates a new array schema from the given items schema.
+ */
+
+static int
+l_schema_new_array(lua_State *L)
+{
+    avro_schema_t  items_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema = avro_schema_array(items_schema);
+    if (schema == NULL) {
+       lua_pushstring(L, avro_strerror());
+       return lua_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
 /*-----------------------------------------------------------------------
  * Lua access — resolvers
  */
@@ -1292,6 +1311,7 @@ static const luaL_Reg  resolver_methods[] =
 
 static const luaL_Reg  mod_methods[] =
 {
+    {"ArraySchema", l_schema_new_array},
     {"Resolver", l_resolver_new},
     {"Schema", l_schema_new},
     {"Value", l_datum_new},
