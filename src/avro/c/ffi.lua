@@ -748,16 +748,20 @@ LuaAvroValue = ffi.metatype([[LuaAvroValue]], Value_mt)
 local Resolver_class = {}
 local Resolver_mt = { __index = Resolver_class }
 
-function Resolver_class:decode(buf, dest)
-   local reader = avro.avro_reader_memory(buf, #buf)
+function raw_decode_value(resolver, buf, size, dest)
+   local reader = avro.avro_reader_memory(buf, size)
    local void_datum = ffi.cast([[void *]], dest.datum)
-   local rc = avro.avro_consume_binary(reader, self.resolver, void_datum)
+   local rc = avro.avro_consume_binary(reader, resolver.resolver, void_datum)
    avro.avro_reader_free(reader)
    if rc == 0 then
       return true
    else
       return nil, ffi.string(avro.avro_strerror())
    end
+end
+
+function Resolver_class:decode(buf, dest)
+   return raw_decode_value(self, buf, #buf, dest)
 end
 
 function Resolver_mt:__gc()

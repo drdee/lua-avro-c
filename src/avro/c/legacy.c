@@ -980,7 +980,7 @@ l_datum_encoded_size(lua_State *L)
  * Encode an Avro value using the binary encoding.  The result is
  * placed into the given memory region, which is provided as a light
  * user data and a size.  There's no safety checking here; to make it
- * easier to not include this function in sandboxes, it's exposes as a
+ * easier to not include this function in sandboxes, it's exposed as a
  * global function in the "avro" package, and not as a method of the
  * AvroValue class.
  */
@@ -1275,6 +1275,40 @@ l_resolver_decode(lua_State *L)
 }
 
 
+/**
+ * Decode an Avro value, using the binary encoding, from the given
+ * memory region, which is provided as a light user data and a size.
+ * There's no safety checking here; to make it easier to not include
+ * this function in sandboxes, it's exposed as a global function in the
+ * "avro" package, and not as a method of the AvroValue class.
+ */
+
+static int
+l_datum_decode_raw(lua_State *L)
+{
+    LuaAvroResolver  *l_resolver = luaL_checkudata(L, 1, MT_AVRO_RESOLVER);
+    if (!lua_islightuserdata(L, 2)) {
+        return luaL_error(L, "Destination buffer should be a light userdata");
+    }
+    void  *buf = lua_touserdata(L, 2);
+    size_t  size = luaL_checkinteger(L, 3);
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 4, MT_AVRO_DATUM);
+
+    avro_reader_t  reader = avro_reader_memory(buf, size);
+    int rc = avro_consume_binary(reader, l_resolver->resolver, l_datum->datum);
+    avro_reader_free(reader);
+
+    if (rc != 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, avro_strerror());
+        return 2;
+    }
+
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+
 /*-----------------------------------------------------------------------
  * Lua access — module
  */
@@ -1315,6 +1349,7 @@ static const luaL_Reg  mod_methods[] =
     {"Resolver", l_resolver_new},
     {"Schema", l_schema_new},
     {"Value", l_datum_new},
+    {"raw_decode_value", l_datum_decode_raw},
     {"raw_encode_value", l_datum_encode_raw},
     {NULL, NULL}
 };
