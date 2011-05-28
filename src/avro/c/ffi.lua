@@ -37,6 +37,10 @@ const char *
 avro_strerror(void);
 ]]
 
+local function get_avro_error()
+   return nil, ffi.string(avro.avro_strerror())
+end
+
 local function avro_error()
    error(ffi.string(avro.avro_strerror()))
 end
@@ -62,6 +66,17 @@ typedef struct avro_consumer_t  avro_consumer_t;
 typedef struct LuaAvroResolver {
     avro_consumer_t  *resolver;
 } LuaAvroResolver;
+
+typedef struct avro_file_reader_t_  *avro_file_reader_t;
+typedef struct avro_file_writer_t_  *avro_file_writer_t;
+
+typedef struct LuaAvroDataInputFile {
+    avro_file_reader_t  reader;
+} LuaAvroDataInputFile;
+
+typedef struct LuaAvroDataOutputFile {
+    avro_file_writer_t  writer;
+} LuaAvroDataOutputFile;
 ]]
 
 local avro_schema_t = ffi.typeof([[avro_schema_t]])
@@ -72,6 +87,9 @@ local LuaAvroValue
 
 local avro_consumer_t = ffi.typeof([[avro_consumer_t *]])
 local LuaAvroConsumer
+
+local LuaAvroDataInputFile
+local LuaAvroDataOutputFile
 
 
 ------------------------------------------------------------------------
@@ -114,6 +132,8 @@ local int64_t_ptr = ffi.typeof([=[ int64_t[1] ]=])
 local size_t_ptr = ffi.typeof([=[ size_t[1] ]=])
 
 local avro_datum_t_ptr = ffi.typeof([=[ avro_datum_t[1] ]=])
+local avro_file_reader_t_ptr = ffi.typeof([=[ avro_file_reader_t[1] ]=])
+local avro_file_writer_t_ptr = ffi.typeof([=[ avro_file_writer_t[1] ]=])
 local avro_schema_t_ptr = ffi.typeof([=[ avro_schema_t[1] ]=])
 local avro_schema_error_t_ptr = ffi.typeof([=[ avro_schema_error_t[1] ]=])
 
@@ -173,6 +193,25 @@ avro_enum_get_name(const avro_datum_t datum);
 int
 avro_enum_set_name(avro_datum_t datum, const char *val);
 
+int
+avro_file_reader(const char *path, avro_file_reader_t *reader);
+
+int
+avro_file_reader_close(avro_file_reader_t reader);
+
+int
+avro_file_reader_read(avro_file_reader_t reader, avro_schema_t rschema,
+                      avro_datum_t *datum);
+
+int
+avro_file_writer_append(avro_file_writer_t writer, avro_datum_t datum);
+
+int
+avro_file_writer_close(avro_file_writer_t writer);
+
+int
+avro_file_writer_create(const char *path, avro_schema_t schema,
+                        avro_file_writer_t *writer);
 int
 avro_fixed_get(avro_datum_t datum, char **val, int64_t *size);
 
@@ -778,3 +817,69 @@ function Resolver(wschema, rschema)
 end
 
 LuaAvroResolver = ffi.metatype([[LuaAvroResolver]], Resolver_mt)
+
+------------------------------------------------------------------------
+-- Data files
+
+local DataInputFile_class = {}
+local DataInputFile_mt = { __index = DataInputFile_class }
+
+function DataInputFile_class:read(value)
+   local datum = ffi.new(avro_datum_t_ptr)
+   local rc = avro.avro_file_reader_read(self.reader, nil, datum)
+   if rc ~= 0 then return get_avro_error() end
+   if value then
+      value.datum = datum[0]
+   else
+      value = LuaAvroValue(datum[0])
+   end
+   return value
+end
+
+function DataInputFile_class:close()
+   if self.reader ~= nil then
+      avro.avro_file_reader_close(self.reader)
+      self.reader = nil
+   end
+end
+
+DataInputFile_mt.__gc = DataInputFile_class.close
+LuaAvroDataInputFile = ffi.metatype([[LuaAvroDataInputFile]], DataInputFile_mt)
+
+local DataOutputFile_class = {}
+local DataOutputFile_mt = { __index = DataOutputFile_class }
+
+function DataOutputFile_class:write(value)
+   local rc = avro.avro_file_writer_append(self.writer, value.datum)
+   if rc ~= 0 then avro_error() end
+end
+
+function DataOutputFile_class:close()
+   if self.writer ~= nil then
+      avro.avro_file_writer_close(self.writer)
+      self.writer = nil
+   end
+end
+
+DataOutputFile_mt.__gc = DataOutputFile_class.close
+LuaAvroDataOutputFile = ffi.metatype([[LuaAvroDataOutputFile]], DataOutputFile_mt)
+
+function open(path, mode, schema)
+   mode = mode or "r"
+
+   if mode == "r" then
+      local reader = ffi.new(avro_file_reader_t_ptr)
+      local rc = avro.avro_file_reader(path, reader)
+      if rc ~= 0 then avro_error() end
+      return LuaAvroDataInputFile(reader[0])
+
+   elseif mode == "w" then
+      local writer = ffi.new(avro_file_writer_t_ptr)
+      local rc = avro.avro_file_writer_create(path, schema.schema, writer)
+      if rc ~= 0 then avro_error() end
+      return LuaAvroDataOutputFile(writer[0])
+
+   else
+      error("Invalid mode "..mode)
+   end
+end
