@@ -980,7 +980,7 @@ l_datum_encoded_size(lua_State *L)
  * Encode an Avro value using the binary encoding.  The result is
  * placed into the given memory region, which is provided as a light
  * user data and a size.  There's no safety checking here; to make it
- * easier to not include this function in sandboxes, it's exposes as a
+ * easier to not include this function in sandboxes, it's exposed as a
  * global function in the "avro" package, and not as a method of the
  * AvroValue class.
  */
@@ -1153,6 +1153,25 @@ l_schema_new(lua_State *L)
 }
 
 
+/**
+ * Creates a new array schema from the given items schema.
+ */
+
+static int
+l_schema_new_array(lua_State *L)
+{
+    avro_schema_t  items_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema = avro_schema_array(items_schema);
+    if (schema == NULL) {
+       lua_pushstring(L, avro_strerror());
+       return lua_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
 /*-----------------------------------------------------------------------
  * Lua access — resolvers
  */
@@ -1256,6 +1275,246 @@ l_resolver_decode(lua_State *L)
 }
 
 
+/**
+ * Decode an Avro value, using the binary encoding, from the given
+ * memory region, which is provided as a light user data and a size.
+ * There's no safety checking here; to make it easier to not include
+ * this function in sandboxes, it's exposed as a global function in the
+ * "avro" package, and not as a method of the AvroValue class.
+ */
+
+static int
+l_datum_decode_raw(lua_State *L)
+{
+    LuaAvroResolver  *l_resolver = luaL_checkudata(L, 1, MT_AVRO_RESOLVER);
+    if (!lua_islightuserdata(L, 2)) {
+        return luaL_error(L, "Destination buffer should be a light userdata");
+    }
+    void  *buf = lua_touserdata(L, 2);
+    size_t  size = luaL_checkinteger(L, 3);
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 4, MT_AVRO_DATUM);
+
+    avro_reader_t  reader = avro_reader_memory(buf, size);
+    int rc = avro_consume_binary(reader, l_resolver->resolver, l_datum->datum);
+    avro_reader_free(reader);
+
+    if (rc != 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, avro_strerror());
+        return 2;
+    }
+
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+
+/*-----------------------------------------------------------------------
+ * Lua access — data files
+ */
+
+/**
+ * The string used to identify the AvroDataInputFile class's metatable
+ * in the Lua registry.
+ */
+
+#define MT_AVRO_DATA_INPUT_FILE "avro:AvroDataInputFile"
+
+
+typedef struct _LuaAvroDataInputFile
+{
+    avro_file_reader_t  reader;
+} LuaAvroDataInputFile;
+
+
+int
+lua_avro_push_file_reader(lua_State *L, avro_file_reader_t reader)
+{
+    LuaAvroDataInputFile  *l_file;
+
+    l_file = lua_newuserdata(L, sizeof(LuaAvroDataInputFile));
+    l_file->reader = reader;
+    luaL_getmetatable(L, MT_AVRO_DATA_INPUT_FILE);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+
+avro_file_reader_t
+lua_avro_get_file_reader(lua_State *L, int index)
+{
+    LuaAvroDataInputFile  *l_file =
+        luaL_checkudata(L, index, MT_AVRO_DATA_INPUT_FILE);
+    return l_file->reader;
+}
+
+
+/**
+ * Closes a file reader.
+ */
+
+static int
+l_input_file_close(lua_State *L)
+{
+    LuaAvroDataInputFile  *l_file =
+        luaL_checkudata(L, 1, MT_AVRO_DATA_INPUT_FILE);
+    if (l_file->reader != NULL) {
+        avro_file_reader_close(l_file->reader);
+        l_file->reader = NULL;
+    }
+    return 0;
+}
+
+/**
+ * Reads a value from a file reader.
+ */
+
+static int
+l_input_file_read(lua_State *L)
+{
+    int  nargs = lua_gettop(L);
+    avro_file_reader_t  reader = lua_avro_get_file_reader(L, 1);
+
+    if (nargs == 1) {
+        /* No Value instance given, so create one. */
+        avro_datum_t  datum;
+        int  rc = avro_file_reader_read(reader, NULL, &datum);
+        if (rc != 0) {
+            lua_pushnil(L);
+            lua_pushstring(L, avro_strerror());
+            return 2;
+        }
+        lua_avro_push_datum(L, datum);
+        return 1;
+    }
+
+    else {
+        /* Otherwise read into the given datum. */
+        LuaAvroDatum  *l_datum = luaL_checkudata(L, 2, MT_AVRO_DATUM);
+        int  rc = avro_file_reader_read(reader, NULL, &l_datum->datum);
+        if (rc != 0) {
+            lua_pushnil(L);
+            lua_pushstring(L, avro_strerror());
+            return 2;
+        }
+        lua_pushvalue(L, 2);
+        return 1;
+    }
+}
+
+
+/**
+ * The string used to identify the AvroDataOutputFile class's metatable
+ * in the Lua registry.
+ */
+
+#define MT_AVRO_DATA_OUTPUT_FILE "avro:AvroDataOutputFile"
+
+
+typedef struct _LuaAvroDataOutputFile
+{
+    avro_file_writer_t  writer;
+} LuaAvroDataOutputFile;
+
+
+int
+lua_avro_push_file_writer(lua_State *L, avro_file_writer_t writer)
+{
+    LuaAvroDataOutputFile  *l_file;
+
+    l_file = lua_newuserdata(L, sizeof(LuaAvroDataOutputFile));
+    l_file->writer = writer;
+    luaL_getmetatable(L, MT_AVRO_DATA_OUTPUT_FILE);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+
+avro_file_writer_t
+lua_avro_get_file_writer(lua_State *L, int index)
+{
+    LuaAvroDataOutputFile  *l_file =
+        luaL_checkudata(L, index, MT_AVRO_DATA_OUTPUT_FILE);
+    return l_file->writer;
+}
+
+
+/**
+ * Closes a file writer.
+ */
+
+static int
+l_output_file_close(lua_State *L)
+{
+    LuaAvroDataOutputFile  *l_file =
+        luaL_checkudata(L, 1, MT_AVRO_DATA_OUTPUT_FILE);
+    if (l_file->writer != NULL) {
+        avro_file_writer_close(l_file->writer);
+        l_file->writer = NULL;
+    }
+    return 0;
+}
+
+/**
+ * Writes a value to a file writer.
+ */
+
+static int
+l_output_file_write(lua_State *L)
+{
+    avro_file_writer_t  writer = lua_avro_get_file_writer(L, 1);
+
+    LuaAvroDatum  *l_datum = luaL_checkudata(L, 2, MT_AVRO_DATUM);
+    int  rc = avro_file_writer_append(writer, l_datum->datum);
+    if (rc != 0) {
+        return luaL_error(L, "%s", avro_strerror());
+    }
+    return 0;
+}
+
+
+/**
+ * Opens a new input or output file.
+ */
+
+static int
+l_file_open(lua_State *L)
+{
+    static const char  *MODES[] = { "r", "w", NULL };
+
+    const char  *path = luaL_checkstring(L, 1);
+    int  mode = luaL_checkoption(L, 2, "r", MODES);
+
+    if (mode == 0) {
+        /* mode == "r" */
+        avro_file_reader_t  reader;
+        int  rc = avro_file_reader(path, &reader);
+        if (rc != 0) {
+            lua_pushnil(L);
+            lua_pushstring(L, avro_strerror());
+            return 2;
+        }
+        lua_avro_push_file_reader(L, reader);
+        return 1;
+
+    } else if (mode == 1) {
+        /* mode == "w" */
+        avro_schema_t  schema = lua_avro_get_schema(L, 3);
+        avro_file_writer_t  writer;
+        int  rc = avro_file_writer_create(path, schema, &writer);
+        if (rc != 0) {
+            lua_pushnil(L);
+            lua_pushstring(L, avro_strerror());
+            return 2;
+        }
+        lua_avro_push_file_writer(L, writer);
+        return 1;
+    }
+
+    return 0;
+}
+
+
 /*-----------------------------------------------------------------------
  * Lua access — module
  */
@@ -1290,11 +1549,30 @@ static const luaL_Reg  resolver_methods[] =
 };
 
 
+static const luaL_Reg  input_file_methods[] =
+{
+    {"close", l_input_file_close},
+    {"read", l_input_file_read},
+    {NULL, NULL}
+};
+
+
+static const luaL_Reg  output_file_methods[] =
+{
+    {"close", l_output_file_close},
+    {"write", l_output_file_write},
+    {NULL, NULL}
+};
+
+
 static const luaL_Reg  mod_methods[] =
 {
+    {"ArraySchema", l_schema_new_array},
     {"Resolver", l_resolver_new},
     {"Schema", l_schema_new},
     {"Value", l_datum_new},
+    {"open", l_file_open},
+    {"raw_decode_value", l_datum_decode_raw},
     {"raw_encode_value", l_datum_encode_raw},
     {NULL, NULL}
 };
@@ -1354,7 +1632,27 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
-    luaL_register(L, "avro", mod_methods);
+    /* AvroInputFile metatable */
+
+    luaL_newmetatable(L, MT_AVRO_DATA_INPUT_FILE);
+    lua_createtable(L, 0, sizeof(input_file_methods) / sizeof(luaL_reg) - 1);
+    luaL_register(L, NULL, input_file_methods);
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_input_file_close);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
+    /* AvroOutputFile metatable */
+
+    luaL_newmetatable(L, MT_AVRO_DATA_OUTPUT_FILE);
+    lua_createtable(L, 0, sizeof(output_file_methods) / sizeof(luaL_reg) - 1);
+    luaL_register(L, NULL, output_file_methods);
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_output_file_close);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
+    luaL_register(L, "avro.c.legacy", mod_methods);
 
     set_avro_const(BOOLEAN);
     set_avro_const(BYTES);

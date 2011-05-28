@@ -64,7 +64,8 @@ end
 
 do
    local function test_array(prim_type, expected)
-      local schema = A.Schema([[{"type": "array", "items": "]]..prim_type..[["}]])
+      local items_schema = A.Schema([[{"type": "]]..prim_type..[["}]])
+      local schema = A.ArraySchema(items_schema)
       local array = schema:new_value()
       for _,val in ipairs(expected) do
          array:append(val)
@@ -213,4 +214,51 @@ do
    test_int("\000", 0)
    test_int("\001", -1)
    test_int("\002", 1)
+end
+
+------------------------------------------------------------------------
+-- Files
+
+do
+   local expected = {1,2,3,4,5,6,7,8,9,10}
+
+   local filename = "test-data.avro"
+   local schema = A.Schema([[{"type": "int"}]])
+   local writer = A.open(filename, "w", schema)
+   local value = schema:new_value()
+
+   for _,i in ipairs(expected) do
+      value:set(i)
+      writer:write(value)
+   end
+
+   writer:close()
+
+   local reader, actual
+
+   -- Read once passing in a value parameter, once without.
+
+   reader = A.open(filename)
+   actual = {}
+   value = reader:read()
+   while value do
+      table.insert(actual, value:scalar())
+      value = reader:read()
+   end
+   reader:close()
+   assert(deepcompare(expected, actual))
+
+   reader = A.open(filename)
+   actual = {}
+   value = schema:new_value()
+   value = reader:read(value)
+   while value do
+      table.insert(actual, value:scalar())
+      value = reader:read(value)
+   end
+   reader:close()
+   assert(deepcompare(expected, actual))
+
+   -- And cleanup
+   os.remove(filename)
 end
