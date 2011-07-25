@@ -13,7 +13,6 @@
 #include <string.h>
 
 #include <avro.h>
-#include <avro/consumer.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -24,50 +23,76 @@
  */
 
 /**
- * The string used to identify the AvroDatum class's metatable in the
+ * The string used to identify the AvroValue class's metatable in the
  * Lua registry.
  */
 
-#define MT_AVRO_DATUM "avro:AvroDatum"
-#define MT_AVRO_DATUM_METHODS "avro:AvroDatum:methods"
+#define MT_AVRO_VALUE "avro:AvroValue"
+#define MT_AVRO_VALUE_METHODS "avro:AvroValue:methods"
 
-
-typedef struct _LuaAvroDatum
+static int
+lua_return_avro_error(lua_State *L)
 {
-    avro_datum_t  datum;
-} LuaAvroDatum;
+    lua_pushnil(L);
+    lua_pushstring(L, avro_strerror());
+    return 2;
+}
+
+static int
+lua_avro_error(lua_State *L)
+{
+    lua_pushstring(L, avro_strerror());
+    return lua_error(L);
+}
+
+#define check(call) \
+    do { \
+        int __rc; \
+        __rc = call; \
+        if (__rc != 0) { \
+            return lua_avro_error(L); \
+        } \
+    } while (0)
+
+
+typedef struct _LuaAvroValue
+{
+    avro_value_t  value;
+    bool  should_free;
+} LuaAvroValue;
 
 
 int
-lua_avro_push_datum(lua_State *L, avro_datum_t datum)
+lua_avro_push_value(lua_State *L, avro_value_t *value, bool should_free)
 {
-    LuaAvroDatum  *l_datum;
+    LuaAvroValue  *l_value;
 
-    l_datum = lua_newuserdata(L, sizeof(LuaAvroDatum));
-    l_datum->datum = avro_datum_incref(datum);
-    luaL_getmetatable(L, MT_AVRO_DATUM);
+    l_value = lua_newuserdata(L, sizeof(LuaAvroValue));
+    l_value->value = *value;
+    l_value->should_free = should_free;
+    luaL_getmetatable(L, MT_AVRO_VALUE);
     lua_setmetatable(L, -2);
     return 1;
 }
 
 
-avro_datum_t
-lua_avro_get_datum(lua_State *L, int index)
+avro_value_t *
+lua_avro_get_value(lua_State *L, int index)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, index, MT_AVRO_DATUM);
-    return l_datum->datum;
+    LuaAvroValue  *l_value = luaL_checkudata(L, index, MT_AVRO_VALUE);
+    return &l_value->value;
 }
 
 
 /**
- * Returns the type of an AvroDatum instance.
+ * Returns the type of an AvroValue instance.
  */
 
 static int
-l_datum_type(lua_State *L)
+l_value_type(lua_State *L)
 {
-    avro_datum_t  datum = lua_avro_get_datum(L, 1);
-    lua_pushnumber(L, avro_typeof(datum));
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    lua_pushnumber(L, avro_value_get_type(value));
     return 1;
 }
 
@@ -77,18 +102,19 @@ l_datum_type(lua_State *L)
  */
 
 static int
-l_datum_discriminant(lua_State *L)
+l_value_discriminant(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
 
-    if (!is_avro_union(l_datum->datum))
-    {
-        lua_pushstring(L, "Can't get discriminant of a non-union datum");
+    if (avro_value_get_type(value) != AVRO_UNION) {
+        lua_pushliteral(L, "Can't get discriminant of a non-union value");
         return lua_error(L);
     }
 
-    int  discriminant = avro_union_discriminant(l_datum->datum);
-    avro_schema_t  union_schema = avro_datum_get_schema(l_datum->datum);
+    int  discriminant;
+    check(avro_value_get_discriminant(value, &discriminant));
+
+    avro_schema_t  union_schema = avro_value_get_schema(value);
     avro_schema_t  branch =
         avro_schema_union_branch(union_schema, discriminant);
     lua_pushstring(L, avro_schema_type_name(branch));
@@ -97,54 +123,59 @@ l_datum_discriminant(lua_State *L)
 
 
 /**
- * Returns a JSON-encoded string representing the datum.
+ * Returns a JSON-encoded string representing the value.
  */
 
 static int
-l_datum_tostring(lua_State *L)
+l_value_tostring(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+    /*
+    LuaAvroValue  *l_value = luaL_checkudata(L, 1, MT_AVRO_VALUE);
     char  *json_str = NULL;
 
-    if (avro_datum_to_json(l_datum->datum, 1, &json_str))
+    if (avro_value_to_json(l_value->value, 1, &json_str))
     {
-        lua_pushliteral(L, "Error retrieving JSON encoding for datum");
+        lua_pushliteral(L, "Error retrieving JSON encoding for value");
         return lua_error(L);
     }
 
     lua_pushstring(L, json_str);
     free(json_str);
     return 1;
+    */
+    lua_pushliteral(L, "NIY");
+    return 1;
 }
 
 
 /**
- * If @ref datum is an Avro scalar, we push the Lua equivalent onto
- * the stack.  If the datum is not a scalar, and @ref require_scalar
- * is true, we raise a Lua error.  Otherwise, we push a new AvroDatum
+ * If @ref value is an Avro scalar, we push the Lua equivalent onto
+ * the stack.  If the value is not a scalar, and @ref require_scalar
+ * is true, we raise a Lua error.  Otherwise, we push a new AvroValue
  * wrapper onto the stack.
  */
 
 static int
-lua_avro_push_scalar_or_datum(lua_State *L,
-                              avro_datum_t datum,
-                              bool require_scalar)
+lua_avro_push_scalar_or_value(lua_State *L, avro_value_t *value,
+                              bool require_scalar, bool should_free)
 {
-    switch (avro_typeof(datum))
+    switch (avro_value_get_type(value))
     {
       case AVRO_STRING:
         {
-            char  *val = NULL;
-            avro_string_get(datum, &val);
-            lua_pushstring(L, val);
+            const char  *val = NULL;
+            size_t  size = 0;
+            check(avro_value_get_string(value, &val, &size));
+            /* size contains the NUL terminator */
+            lua_pushlstring(L, val, size-1);
             return 1;
         }
 
       case AVRO_BYTES:
         {
-            char  *val = NULL;
-            int64_t  size = 0;
-            avro_bytes_get(datum, &val, &size);
+            const void  *val = NULL;
+            size_t  size = 0;
+            check(avro_value_get_bytes(value, &val, &size));
             lua_pushlstring(L, val, size);
             return 1;
         }
@@ -152,7 +183,7 @@ lua_avro_push_scalar_or_datum(lua_State *L,
       case AVRO_INT32:
         {
             int32_t  val = 0;
-            avro_int32_get(datum, &val);
+            check(avro_value_get_int(value, &val));
             lua_pushnumber(L, val);
             return 1;
         }
@@ -160,7 +191,7 @@ lua_avro_push_scalar_or_datum(lua_State *L,
       case AVRO_INT64:
         {
             int64_t  val = 0;
-            avro_int64_get(datum, &val);
+            check(avro_value_get_long(value, &val));
             lua_pushnumber(L, val);
             return 1;
         }
@@ -168,7 +199,7 @@ lua_avro_push_scalar_or_datum(lua_State *L,
       case AVRO_FLOAT:
         {
             float  val = 0;
-            avro_float_get(datum, &val);
+            check(avro_value_get_float(value, &val));
             lua_pushnumber(L, val);
             return 1;
         }
@@ -176,51 +207,52 @@ lua_avro_push_scalar_or_datum(lua_State *L,
       case AVRO_DOUBLE:
         {
             double  val = 0;
-            avro_double_get(datum, &val);
+            check(avro_value_get_double(value, &val));
             lua_pushnumber(L, val);
             return 1;
         }
 
       case AVRO_BOOLEAN:
         {
-            int8_t  val = 0;
-            avro_boolean_get(datum, &val);
+            int  val = 0;
+            check(avro_value_get_boolean(value, &val));
             lua_pushboolean(L, val);
             return 1;
         }
 
       case AVRO_NULL:
         {
+            check(avro_value_get_null(value));
             lua_pushnil(L);
             return 1;
         }
 
       case AVRO_ENUM:
         {
-            const char  *name = avro_enum_get_name(datum);
+            int  val = 0;
+            check(avro_value_get_enum(value, &val));
+            avro_schema_t  enum_schema = avro_value_get_schema(value);
+            const char  *name = avro_schema_enum_get(enum_schema, val);
             lua_pushstring(L, name);
             return 1;
         }
 
       case AVRO_FIXED:
         {
-            char  *val = NULL;
-            int64_t  size = 0;
-            avro_fixed_get(datum, &val, &size);
+            const void  *val = NULL;
+            size_t  size = 0;
+            check(avro_value_get_fixed(value, &val, &size));
             lua_pushlstring(L, val, size);
             return 1;
         }
 
       default:
-        if (require_scalar)
-        {
-            lua_pushstring(L, "Avro datum isn't a scalar");
-            return lua_error(L);
+        if (require_scalar) {
+            return luaL_error(L, "Avro value isn't a scalar");
         }
 
-        else
-        {
-            lua_avro_push_datum(L, datum);
+        else {
+            lua_avro_push_value(L, value, should_free);
             return 1;
         }
     }
@@ -228,256 +260,211 @@ lua_avro_push_scalar_or_datum(lua_State *L,
 
 
 /**
- * Returns the datum of a scalar AvroDatum instance.  If the datum
+ * Returns the value of a scalar AvroValue instance.  If the value
  * isn't a scalar, we raise an error.
  */
 
 static int
-l_datum_scalar(lua_State *L)
+l_value_scalar(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-    return lua_avro_push_scalar_or_datum(L, l_datum->datum, true);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    return lua_avro_push_scalar_or_value(L, value, true, false);
 }
 
 
 /**
- * Extract the given element from an Avro map datum, and push it onto
- * the stack.  If the datum is a scalar, push the Lua equivalent of
- * the scalar datum onto the stack, rather than a new AvroDatum
- * wrapper.
+ * Extract the given element from an Avro array value, and push it onto
+ * the stack.  If the value is a scalar, push the Lua equivalent of the
+ * scalar value onto the stack, rather than a new AvroValue wrapper.
  *
  * We follow the Lua convention that @ref index is 1-based.
  */
 
 static int
-get_array_element(lua_State *L,
-                  LuaAvroDatum *l_datum,
-                  unsigned int index,
-                  bool coerce_scalar)
+get_array_element(lua_State *L, avro_value_t *value,
+                  unsigned int index, bool coerce_scalar)
 {
-    if ((index < 1) || (index > avro_array_size(l_datum->datum)))
-    {
+    size_t  array_size;
+    check(avro_value_get_size(value, &array_size));
+
+    if ((index < 1) || (index > array_size)) {
         lua_pushnil(L);
         lua_pushliteral(L, "Index out of bounds");
         return 2;
     }
 
-    avro_datum_t  element_datum = NULL;
-    avro_array_get(l_datum->datum, index-1, &element_datum);
+    avro_value_t  element_value;
+    check(avro_value_get_by_index(value, index-1, &element_value, NULL));
 
-    if (coerce_scalar)
-    {
-        return lua_avro_push_scalar_or_datum(L, element_datum, false);
+    if (coerce_scalar) {
+        return lua_avro_push_scalar_or_value(L, &element_value, false, false);
     }
 
-    else
-    {
-        lua_avro_push_datum(L, element_datum);
+    else {
+        lua_avro_push_value(L, &element_value, false);
         return 1;
     }
 }
 
 
 /**
- * Extract the named datum from an Avro map datum, and push it onto
- * the stack.  If the datum is a scalar, push the Lua equivalent of
- * the scalar datum onto the stack, rather than a new AvroDatum
- * wrapper.
+ * Extract the named value from an Avro map value, and push it onto the
+ * stack.  If the value is a scalar, push the Lua equivalent of the
+ * scalar value onto the stack, rather than a new AvroValue wrapper.
  */
 
 static int
-get_map_datum(lua_State *L,
-              LuaAvroDatum *l_datum,
-              const char *key,
-              bool can_create,
-              bool coerce_scalar)
+get_map_value(lua_State *L, avro_value_t *value,
+              const char *key, bool can_create, bool coerce_scalar)
 {
-    avro_datum_t  element_datum = NULL;
-    avro_map_get(l_datum->datum, key, &element_datum);
+    avro_value_t  element_value;
 
-    if (element_datum == NULL)
-    {
-        if (can_create)
-        {
-            avro_schema_t  map_schema = avro_datum_get_schema(l_datum->datum);
-            avro_schema_t  element_schema = avro_schema_map_values(map_schema);
-            element_datum = avro_datum_from_schema(element_schema);
-            avro_map_set(l_datum->datum, key, element_datum);
-            avro_datum_decref(element_datum);
-        }
-
-        else
-        {
+    if (can_create) {
+        check(avro_value_add(value, key, &element_value, NULL, NULL));
+    } else {
+        check(avro_value_get_by_name(value, key, &element_value, NULL));
+        if (element_value.self == NULL) {
             lua_pushnil(L);
             lua_pushliteral(L, "Map element doesn't exist");
             return 2;
         }
     }
 
-    if (coerce_scalar)
-    {
-        return lua_avro_push_scalar_or_datum(L, element_datum, false);
+    if (coerce_scalar) {
+        return lua_avro_push_scalar_or_value(L, &element_value, false, false);
     }
 
-    else
-    {
-        lua_avro_push_datum(L, element_datum);
+    else {
+        lua_avro_push_value(L, &element_value, false);
         return 1;
     }
 }
 
 
 /**
- * Extract the named field from an Avro record datum, and push it onto
- * the stack.  If the field is a scalar, push the Lua equivalent of
- * the scalar datum onto the stack, rather than a new AvroDatum
- * wrapper.
+ * Extract the named field from an Avro record value, and push it onto
+ * the stack.  If the field is a scalar, push the Lua equivalent of the
+ * scalar value onto the stack, rather than a new AvroValue wrapper.
  */
 
 static int
-get_record_field(lua_State *L,
-                 LuaAvroDatum *l_datum,
-                 const char *field_name,
-                 bool coerce_scalar)
+get_record_field(lua_State *L, avro_value_t *value,
+                 const char *field_name, bool coerce_scalar)
 {
-    avro_datum_t  field_datum = NULL;
-    avro_record_get(l_datum->datum, field_name, &field_datum);
+    avro_value_t  field_value;
+    check(avro_value_get_by_name(value, field_name, &field_value, NULL));
 
-    if (field_datum == NULL)
-    {
+    if (field_value.self == NULL) {
         lua_pushnil(L);
         lua_pushliteral(L, "Record field doesn't exist");
         return 2;
     }
 
-    if (coerce_scalar)
-    {
-        return lua_avro_push_scalar_or_datum(L, field_datum, false);
+    if (coerce_scalar) {
+        return lua_avro_push_scalar_or_value(L, &field_value, false, false);
     }
 
-    else
-    {
-        lua_avro_push_datum(L, field_datum);
+    else {
+        lua_avro_push_value(L, &field_value, false);
         return 1;
     }
 }
 
 
 /**
- * Extract the branch datum from an Avro union datum, and push it onto
- * the stack.  If the field is a scalar, push the Lua equivalent of
- * the scalar datum onto the stack, rather than a new AvroDatum
- * wrapper.
+ * Extract the branch value from an Avro union value, and push it onto
+ * the stack.  If the field is a scalar, push the Lua equivalent of the
+ * scalar value onto the stack, rather than a new AvroValue wrapper.
  *
- * The “field_name” for a union branch must be “_”.  All other field
- * names result in a nil result.
+ * If the “field_name” for a union branch is “_”, then we return the
+ * current branch.  Otherwise the “field_name” must match the name of
+ * one of the schemas of the union.
  */
 
 static int
-get_union_branch(lua_State *L,
-                 LuaAvroDatum *l_datum,
-                 const char *field_name,
-                 bool coerce_scalar)
+get_union_branch(lua_State *L, avro_value_t *value,
+                 const char *field_name, bool coerce_scalar)
 {
-    int  discriminant;
-    avro_datum_t  branch;
+    avro_value_t  branch;
 
-    if (strcmp(field_name, "_") == 0)
-    {
-        discriminant = avro_union_discriminant(l_datum->datum);
-        branch = avro_union_current_branch(l_datum->datum);
+    if (field_name[0] == '_' && field_name[1] == '\0') {
+        check(avro_value_get_current_branch(value, &branch));
     }
 
-    else
-    {
-        avro_schema_t  union_schema = avro_datum_get_schema(l_datum->datum);
+    else {
+        int  discriminant;
+        avro_schema_t  union_schema = avro_value_get_schema(value);
         avro_schema_t  branch_schema =
             avro_schema_union_branch_by_name
             (union_schema, &discriminant, field_name);
 
         if (branch_schema == NULL) {
-            lua_pushnil(L);
-            lua_pushstring(L, avro_strerror());
-            return 2;
+            return lua_return_avro_error(L);
         }
 
-        if (avro_union_set_discriminant(l_datum->datum, discriminant, &branch)) {
-            lua_pushnil(L);
-            lua_pushstring(L, avro_strerror());
-            return 2;
-        }
+        check(avro_value_set_branch(value, discriminant, &branch));
     }
 
-    if (coerce_scalar)
-    {
-        return lua_avro_push_scalar_or_datum(L, branch, false);
+    if (coerce_scalar) {
+        return lua_avro_push_scalar_or_value(L, &branch, false, false);
     }
 
-    else
-    {
-        lua_avro_push_datum(L, branch);
+    else {
+        lua_avro_push_value(L, &branch, false);
         return 1;
     }
 }
 
 
 /**
- * Extracts the given subdatum from an AvroDatum instance.  If @ref
- * extract_scalar is true, and the result is a scalar Avro datum, then
- * we extract out scalar datum and push the Lua equivalent onto the
- * stack.  Otherwise, we push an AvroDatum wrapper onto the stack.
+ * Extracts the given subvalue from an AvroValue instance.  If @ref
+ * extract_scalar is true, and the result is a scalar Avro value, then
+ * we extract out scalar value and push the Lua equivalent onto the
+ * stack.  Otherwise, we push an AvroValue wrapper onto the stack.
  */
 
 static int
-get_subdatum(lua_State *L,
-             LuaAvroDatum *l_datum,
-             int index_index,
-             bool can_create,
-             bool coerce_datum)
+get_subvalue(lua_State *L, avro_value_t *value,
+             int index_index, bool can_create, bool coerce_value)
 {
-    if (lua_isnumber(L, index_index))
-    {
+    if (lua_isnumber(L, index_index)) {
         /*
-         * We have an integer index.  If this is an array, look for
-         * the element with the given index.
+         * We have an integer index.  If this is an array, look for the
+         * element with the given index.
          */
 
         lua_Integer  index = lua_tointeger(L, index_index);
 
-        if (is_avro_array(l_datum->datum))
-        {
-            return get_array_element(L, l_datum, index, coerce_datum);
+        if (avro_value_get_type(value) == AVRO_ARRAY) {
+            return get_array_element(L, value, index, coerce_value);
         }
     }
 
     const char  *index_str = luaL_optstring(L, index_index, NULL);
-    if (index_str != NULL)
-    {
+    if (index_str != NULL) {
         /*
-         * We have a string index.  If this is a map, look for the
-         * datum with the given key.  If this is a record, look for a
-         * field with that name.
+         * We have a string index.  If this is a map, look for the value
+         * with the given key.  If this is a record, look for a field
+         * with that name.  If this is a union, activate the given
+         * branch and return it.
          */
 
-        if (is_avro_map(l_datum->datum))
-        {
-            return get_map_datum(L, l_datum, index_str, can_create, coerce_datum);
+        if (avro_value_get_type(value) == AVRO_MAP) {
+            return get_map_value(L, value, index_str, can_create, coerce_value);
         }
 
-        else if (is_avro_record(l_datum->datum))
-        {
-            return get_record_field(L, l_datum, index_str, coerce_datum);
+        if (avro_value_get_type(value) == AVRO_RECORD) {
+            return get_record_field(L, value, index_str, coerce_value);
         }
 
-        else if (is_avro_union(l_datum->datum))
-        {
-            return get_union_branch(L, l_datum, index_str, coerce_datum);
+        if (avro_value_get_type(value) == AVRO_UNION) {
+            return get_union_branch(L, value, index_str, coerce_value);
         }
     }
 
     /*
      * If we fall through to here, we don't know how to handle this
-     * kind of index against this kind of datum.
+     * kind of index against this kind of value.
      */
 
     return 0;
@@ -485,78 +472,78 @@ get_subdatum(lua_State *L,
 
 
 /**
- * Returns the given subdatum in an AvroDatum instance.
+ * Returns the given subvalue in an AvroValue instance.
  */
 
 static int
-l_datum_get(lua_State *L)
+l_value_get(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-    return get_subdatum(L, l_datum, 2, false, true);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    return get_subvalue(L, value, 2, false, true);
 }
 
 
 /**
- * An implementation of the AvroDatum class's __index metamethod.  It
- * first checks the MT_AVRO_DATUM_METHODS table to see if
- * there's an AvroDatum method with the given name.  If not, then we
- * fall back to see if the AvroDatum contains a subfield with that
- * name.
+ * An implementation of the AvroValue class's __index metamethod.  It
+ * first checks the MT_AVRO_VALUE_METHODS table to see if there's an
+ * AvroValue method with the given name.  If not, then we fall back to
+ * see if the AvroValue contains a subfield with that name.
  */
 
 static int
-l_datum_index(lua_State *L)
+l_value_index(lua_State *L)
 {
     /*
      * First see if the METHODS table contains a method function for
      * the given key (which is at stack index 2).
      */
 
-    luaL_getmetatable(L, MT_AVRO_DATUM_METHODS);
+    luaL_getmetatable(L, MT_AVRO_VALUE_METHODS);
     lua_pushvalue(L, 2);
     lua_rawget(L, -2);
 
-    if (!lua_isnil(L, -1))
-    {
+    if (!lua_isnil(L, -1)) {
         return 1;
     }
 
     /*
-     * Otherwise fall back on the AvroDatum:get() method, which looks
-     * for a subdatum with the given name.  Pop off the METHODS table
-     * and nil datum first.
+     * Otherwise fall back on the AvroValue:get() method, which looks
+     * for a subvalue with the given name.  Pop off the METHODS table
+     * and nil value first.
      */
 
     lua_pop(L, 2);
-    return l_datum_get(L);
+    return l_value_get(L);
 }
 
 
 /**
- * Sets the datum datum of an Avro scalar.  If the datum is not a
+ * Sets the value value of an Avro scalar.  If the value is not a
  * scalar, we raise a Lua error.
  */
 
 static int
-set_scalar_datum(lua_State *L, int self_index, int val_index)
+set_scalar_value(lua_State *L, int self_index, int val_index)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, self_index, MT_AVRO_DATUM);
+    avro_value_t  *value = lua_avro_get_value(L, self_index);
 
-    switch (avro_typeof(l_datum->datum))
+    switch (avro_value_get_type(value))
     {
       case AVRO_STRING:
         {
-            const char  *str = luaL_checkstring(L, val_index);
-            avro_string_set(l_datum->datum, str);
+            size_t  str_len;
+            const char  *str = luaL_checklstring(L, val_index, &str_len);
+            /* value length must include NUL terminatory */
+            check(avro_value_set_string_len(value, (char *) str, str_len+1));
             lua_pushvalue(L, self_index);
             return 1;
         }
 
       case AVRO_BYTES:
         {
-            size_t  len = 0;
+            size_t  len;
             const char  *buf = luaL_checklstring(L, val_index, &len);
-            avro_bytes_set(l_datum->datum, buf, len);
+            check(avro_value_set_bytes(value, (void *) buf, len));
             lua_pushvalue(L, self_index);
             return 1;
         }
@@ -564,7 +551,7 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
       case AVRO_INT32:
         {
             lua_Integer  i = luaL_checkinteger(L, val_index);
-            avro_int32_set(l_datum->datum, i);
+            check(avro_value_set_int(value, i));
             lua_pushvalue(L, self_index);
             return 1;
         }
@@ -572,7 +559,7 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
       case AVRO_INT64:
         {
             long  l = luaL_checklong(L, val_index);
-            avro_int64_set(l_datum->datum, l);
+            check(avro_value_set_long(value, l));
             lua_pushvalue(L, self_index);
             return 1;
         }
@@ -580,7 +567,7 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
       case AVRO_FLOAT:
         {
             lua_Number  n = luaL_checknumber(L, val_index);
-            avro_float_set(l_datum->datum, (float) n);
+            check(avro_value_set_float(value, (float) n));
             lua_pushvalue(L, self_index);
             return 1;
         }
@@ -588,7 +575,7 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
       case AVRO_DOUBLE:
         {
             lua_Number  n = luaL_checknumber(L, val_index);
-            avro_double_set(l_datum->datum, (double) n);
+            check(avro_value_set_double(value, (double) n));
             lua_pushvalue(L, self_index);
             return 1;
         }
@@ -596,13 +583,14 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
       case AVRO_BOOLEAN:
         {
             int  b = lua_toboolean(L, val_index);
-            avro_boolean_set(l_datum->datum, b);
+            check(avro_value_set_boolean(value, b));
             lua_pushvalue(L, self_index);
             return 1;
         }
 
       case AVRO_NULL:
         {
+            check(avro_value_set_null(value));
             lua_pushvalue(L, self_index);
             return 1;
         }
@@ -610,7 +598,12 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
       case AVRO_ENUM:
         {
             const char  *symbol = luaL_checkstring(L, val_index);
-            avro_enum_set_name(l_datum->datum, symbol);
+            avro_schema_t  enum_schema = avro_value_get_schema(value);
+            int  symbol_value = avro_schema_enum_get_by_name(enum_schema, symbol);
+            if (symbol_value < 0) {
+                return luaL_error(L, "No symbol named %s", symbol);
+            }
+            check(avro_value_set_enum(value, symbol_value));
             lua_pushvalue(L, self_index);
             return 1;
         }
@@ -619,14 +612,14 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
         {
             size_t  len = 0;
             const char  *buf = luaL_checklstring(L, val_index, &len);
-            avro_fixed_set(l_datum->datum, buf, len);
+            check(avro_value_set_fixed(value, (void *) buf, len));
             lua_pushvalue(L, self_index);
             return 1;
         }
 
       default:
         {
-            lua_pushstring(L, "Avro datum isn't a scalar");
+            lua_pushliteral(L, "Avro value isn't a scalar");
             return lua_error(L);
         }
     }
@@ -634,136 +627,126 @@ set_scalar_datum(lua_State *L, int self_index, int val_index)
 
 
 /**
- * Sets the datum of a scalar (if called with one parameter), or the
- * given subdatum in a compound AvroDatum (if called with two).
+ * Sets the value of a scalar (if called with one parameter), or the
+ * given subvalue in a compound AvroValue (if called with two).
  */
 
 static int
-l_datum_set(lua_State *L)
+l_value_set(lua_State *L)
 {
     int  nargs = lua_gettop(L);
 
     /*
      * If there are two arguments (including self), then the caller is
-     * trying to set the datum of a scalar.
+     * trying to set the value of a scalar.
      */
 
-    if (nargs == 2)
-    {
-        return set_scalar_datum(L, 1, 2);
+    if (nargs == 2) {
+        return set_scalar_value(L, 1, 2);
     }
 
     /*
      * If there are three arguments, then the caller is trying to set
-     * the datum of a field/element/branch, which should be a scalar.
+     * the value of a field/element/branch, which should be a scalar.
      */
 
-    if (nargs == 3)
-    {
-        LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-        if (!get_subdatum(L, l_datum, 2, true, false))
-        {
-            lua_pushstring(L, "Nonexistent subdatum");
+    if (nargs == 3) {
+        avro_value_t  *value = lua_avro_get_value(L, 1);
+        if (!get_subvalue(L, value, 2, true, false)) {
+            lua_pushliteral(L, "Nonexistent subvalue");
             return lua_error(L);
         }
 
         /*
-         * The new datum will be pushed onto the top of the stack.
+         * The new value will be pushed onto the top of the stack.
          */
 
-        return set_scalar_datum(L, -1, 3);
+        return set_scalar_value(L, -1, 3);
     }
 
     /*
      * Bad number of arguments!
      */
 
-    lua_pushstring(L, "Bad number of arguments to AvroDatum:set");
+    lua_pushliteral(L, "Bad number of arguments to AvroValue:set");
     return lua_error(L);
 }
 
 
 /**
- * An implementation of the AvroDatum class's __newindex metamethod.  It
- * first checks the MT_AVRO_DATUM_METHODS table to see if there's an
- * AvroDatum method with the given name.  If so, you can't use this
+ * An implementation of the AvroValue class's __newindex metamethod.  It
+ * first checks the MT_AVRO_VALUE_METHODS table to see if there's an
+ * AvroValue method with the given name.  If so, you can't use this
  * syntax to set the field; you must use the set method, instead.
  */
 
 static int
-l_datum_newindex(lua_State *L)
+l_value_newindex(lua_State *L)
 {
     /*
      * First see if the METHODS table contains a method function for
      * the given key (which is at stack index 2).
      */
 
-    luaL_getmetatable(L, MT_AVRO_DATUM_METHODS);
+    luaL_getmetatable(L, MT_AVRO_VALUE_METHODS);
     lua_pushvalue(L, 2);
     lua_rawget(L, -2);
 
-    if (!lua_isnil(L, -1))
-    {
-        lua_pushstring(L, "Cannot set field with [] syntax");
+    if (!lua_isnil(L, -1)) {
+        lua_pushliteral(L, "Cannot set field with [] syntax");
         return lua_error(L);
     }
 
     /*
-     * Otherwise fall back on the AvroDatum:set() method, which looks
-     * for a subdatum with the given name.  Pop off the METHODS table
-     * and nil datum first.
+     * Otherwise fall back on the AvroValue:set() method, which looks
+     * for a subvalue with the given name.  Pop off the METHODS table
+     * and nil value first.
      */
 
     lua_pop(L, 2);
-    return l_datum_set(L);
+    return l_value_set(L);
 }
 
 
 /**
  * Appends a new element to an Avro array.  If called with one
- * parameter, then the array must contain scalars, and the parameter
- * is used as the datum of the new element.  If called with no
- * parameters, then the array can contain any kind of element.  In
- * both cases, we return the AvroDatum for the new element.
+ * parameter, then the array must contain scalars, and the parameter is
+ * used as the value of the new element.  If called with no parameters,
+ * then the array can contain any kind of element.  In both cases, we
+ * return the AvroValue for the new element.
  */
 
 static int
-l_datum_append(lua_State *L)
+l_value_append(lua_State *L)
 {
     int  nargs = lua_gettop(L);
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
 
-    if (!is_avro_array(l_datum->datum))
-    {
-        lua_pushstring(L, "Can only append to an array");
+    if (avro_value_get_type(value) != AVRO_ARRAY) {
+        lua_pushliteral(L, "Can only append to an array");
         return lua_error(L);
     }
 
-    if (nargs > 2)
-    {
-        lua_pushstring(L, "Bad number of arguments to AvroDatum:append");
+    if (nargs > 2) {
+        lua_pushliteral(L, "Bad number of arguments to AvroValue:append");
         return lua_error(L);
     }
 
-    avro_schema_t  array_schema = avro_datum_get_schema(l_datum->datum);
-    avro_schema_t  element_schema = avro_schema_array_items(array_schema);
-    avro_datum_t  element = avro_datum_from_schema(element_schema);
-    avro_array_append_datum(l_datum->datum, element);
-    lua_avro_push_datum(L, element);
-    avro_datum_decref(element);
+    avro_value_t  element;
+    check(avro_value_append(value, &element, NULL));
+    lua_avro_push_value(L, &element, false);
 
-    if (nargs == 2)
-    {
+    if (nargs == 2) {
         /*
-         * If the caller provided a datum, then the new element must
-         * be a scalar.
+         * If the caller provided a value, then the new element must be
+         * a scalar.
          */
 
-        return set_scalar_datum(L, -1, 2);
+        return set_scalar_value(L, -1, 2);
     }
 
     /*
-     * Otherwise just return the new element datum.
+     * Otherwise just return the new element value.
      */
 
     return 1;
@@ -771,30 +754,30 @@ l_datum_append(lua_State *L)
 
 
 /**
- * Iterates through the elements of an Avro array or map.  The result
- * of this function can be used as a for loop iterator.  For arrays,
- * the iterator behaves like the builtin ipairs function, returning
- * [i, element] pairs during each iteration.  For maps, it behaves
- * like the builtin pairs function, returning [key, element] pairs.
- * In both cases, if the elements are scalars, these will be
- * translated into the Lua equivalent; if they're compound datum
- * objects, you'll get an AvroDatum instance.
+ * Iterates through the elements of an Avro array or map.  The result of
+ * this function can be used as a for loop iterator.  For arrays, the
+ * iterator behaves like the builtin ipairs function, returning [i,
+ * element] pairs during each iteration.  For maps, it behaves like the
+ * builtin pairs function, returning [key, element] pairs.  In both
+ * cases, if the elements are scalars, these will be translated into the
+ * Lua equivalent; if they're compound value objects, you'll get an
+ * AvroValue instance.
  */
 
 typedef struct _Iterator
 {
-    avro_datum_t  datum;
-    unsigned int  next_index;
+    avro_value_t  *value;
+    size_t  next_index;
 } Iterator;
 
-#define MT_ITERATOR "sawmill:AvroDatum:iterator"
+#define MT_ITERATOR "sawmill:AvroValue:iterator"
 
 static void
-create_iterator(lua_State *L, avro_datum_t datum)
+create_iterator(lua_State *L, avro_value_t *value)
 {
     lua_newuserdata(L, sizeof(Iterator));
     Iterator  *state = lua_touserdata(L, -1);
-    state->datum = avro_datum_incref(datum);
+    state->value = value;
     state->next_index = 0;
     luaL_getmetatable(L, MT_ITERATOR);
     lua_setmetatable(L, -2);
@@ -804,11 +787,7 @@ static int
 iterator_gc(lua_State *L)
 {
     Iterator  *state = luaL_checkudata(L, 1, MT_ITERATOR);
-    if (state->datum != NULL)
-    {
-        avro_datum_decref(state->datum);
-        state->datum = NULL;
-    }
+    state->value = NULL;
     return 0;
 }
 
@@ -816,22 +795,21 @@ static int
 iterate_array(lua_State *L)
 {
     Iterator  *state = luaL_checkudata(L, 1, MT_ITERATOR);
-    unsigned int  length = avro_array_size(state->datum);
+    size_t  length;
+    check(avro_value_get_size(state->value, &length));
 
     /*
-     * next_index is the 0-based avro index, not the 1-based Lua
-     * index.
+     * next_index is the 0-based avro index, not the 1-based Lua index.
      */
 
-    if (state->next_index >= length)
-    {
+    if (state->next_index >= length) {
         return 0;
     }
 
-    avro_datum_t  element = NULL;
-    avro_array_get(state->datum, state->next_index, &element);
+    avro_value_t  element;
+    check(avro_value_get_by_index(state->value, state->next_index, &element, NULL));
     lua_pushinteger(L, state->next_index+1);
-    lua_avro_push_scalar_or_datum(L, element, false);
+    lua_avro_push_scalar_or_value(L, &element, false, false);
 
     state->next_index++;
     return 2;
@@ -841,58 +819,52 @@ static int
 iterate_map(lua_State *L)
 {
     Iterator  *state = luaL_checkudata(L, 1, MT_ITERATOR);
-    unsigned int  length = avro_map_size(state->datum);
+    size_t  length;
+    check(avro_value_get_size(state->value, &length));
 
     /*
-     * next_index is the 0-based avro index, not the 1-based Lua
-     * index.
+     * next_index is the 0-based avro index, not the 1-based Lua index.
      */
 
-    if (state->next_index >= length)
-    {
+    if (state->next_index >= length) {
         return 0;
     }
 
     const char  *key = NULL;
-    avro_datum_t  element = NULL;
-    avro_map_get_key(state->datum, state->next_index, &key);
-    avro_map_get(state->datum, key, &element);
+    avro_value_t  element;
+    check(avro_value_get_by_index(state->value, state->next_index, &element, &key));
 
     lua_pushstring(L, key);
-    lua_avro_push_scalar_or_datum(L, element, false);
+    lua_avro_push_scalar_or_value(L, &element, false, false);
 
     state->next_index++;
     return 2;
 }
 
 static int
-l_datum_iterate(lua_State *L)
+l_value_iterate(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    avro_type_t  value_type = avro_value_get_type(value);
 
-    if (is_avro_array(l_datum->datum))
-    {
+    if (value_type == AVRO_ARRAY) {
         lua_pushcfunction(L, iterate_array);
-        create_iterator(L, l_datum->datum);
+        create_iterator(L, value);
         lua_pushnil(L);
         return 3;
     }
 
-    if (is_avro_map(l_datum->datum))
-    {
+    if (value_type == AVRO_MAP) {
         lua_pushcfunction(L, iterate_map);
-        create_iterator(L, l_datum->datum);
+        create_iterator(L, value);
         lua_pushnil(L);
         return 3;
     }
 
-    lua_pushstring(L, "Can only iterate through arrays and maps");
+    lua_pushliteral(L, "Can only iterate through arrays and maps");
     return lua_error(L);
 }
 
-
-static avro_consumer_t  *encoding_consumer = NULL;
-static avro_consumer_t  *sizeof_consumer = NULL;
 
 /**
  * Encode an Avro value using the binary encoding.  Returns the result
@@ -900,22 +872,14 @@ static avro_consumer_t  *sizeof_consumer = NULL;
  */
 
 static int
-l_datum_encode(lua_State *L)
+l_value_encode(lua_State *L)
 {
     static char  static_buf[65536];
 
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-
-    if (encoding_consumer == NULL) {
-        encoding_consumer = avro_encoding_consumer_new();
-    }
-
-    if (sizeof_consumer == NULL) {
-        sizeof_consumer = avro_sizeof_consumer_new();
-    }
+    avro_value_t  *value = lua_avro_get_value(L, 1);
 
     size_t  size = 0;
-    avro_consume_datum(l_datum->datum, sizeof_consumer, &size);
+    check(avro_value_sizeof(value, &size));
 
     int  result;
     char  *buf;
@@ -928,23 +892,21 @@ l_datum_encode(lua_State *L)
         buf = malloc(size);
         if (buf == NULL) {
             lua_pushnil(L);
-            lua_pushstring(L, "Out of memory");
+            lua_pushliteral(L, "Out of memory");
             return 2;
         }
         free_buf = true;
     }
 
     avro_writer_t  writer = avro_writer_memory(buf, size);
-    result = avro_consume_datum(l_datum->datum, encoding_consumer, writer);
+    result = avro_value_write(writer, value);
     avro_writer_free(writer);
 
     if (result) {
         if (free_buf) {
             free(buf);
         }
-        lua_pushnil(L);
-        lua_pushstring(L, avro_strerror());
-        return 2;
+        return lua_return_avro_error(L);
     }
 
     lua_pushlstring(L, buf, size);
@@ -960,16 +922,12 @@ l_datum_encode(lua_State *L)
  */
 
 static int
-l_datum_encoded_size(lua_State *L)
+l_value_encoded_size(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-
-    if (sizeof_consumer == NULL) {
-        sizeof_consumer = avro_sizeof_consumer_new();
-    }
+    avro_value_t  *value = lua_avro_get_value(L, 1);
 
     size_t  size = 0;
-    avro_consume_datum(l_datum->datum, sizeof_consumer, &size);
+    check(avro_value_sizeof(value, &size));
 
     lua_pushinteger(L, size);
     return 1;
@@ -977,30 +935,26 @@ l_datum_encoded_size(lua_State *L)
 
 
 /**
- * Encode an Avro value using the binary encoding.  The result is
- * placed into the given memory region, which is provided as a light
- * user data and a size.  There's no safety checking here; to make it
- * easier to not include this function in sandboxes, it's exposed as a
- * global function in the "avro" package, and not as a method of the
- * AvroValue class.
+ * Encode an Avro value using the binary encoding.  The result is placed
+ * into the given memory region, which is provided as a light user data
+ * and a size.  There's no safety checking here; to make it easier to
+ * not include this function in sandboxes, it's exposed as a global
+ * function in the "avro" package, and not as a method of the AvroValue
+ * class.
  */
 
 static int
-l_datum_encode_raw(lua_State *L)
+l_value_encode_raw(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
     if (!lua_islightuserdata(L, 2)) {
         return luaL_error(L, "Destination buffer should be a light userdata");
     }
     void  *buf = lua_touserdata(L, 2);
     size_t  size = luaL_checkinteger(L, 3);
 
-    if (encoding_consumer == NULL) {
-        encoding_consumer = avro_encoding_consumer_new();
-    }
-
     avro_writer_t  writer = avro_writer_memory(buf, size);
-    int  result = avro_consume_datum(l_datum->datum, encoding_consumer, writer);
+    int  result = avro_value_write(writer, value);
     avro_writer_free(writer);
 
     if (result) {
@@ -1015,28 +969,29 @@ l_datum_encode_raw(lua_State *L)
 
 
 /**
- * Finalizes an AvroDatum instance.
+ * Finalizes an AvroValue instance.
  */
 
 static int
-l_datum_gc(lua_State *L)
+l_value_gc(lua_State *L)
 {
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 1, MT_AVRO_DATUM);
-    if (l_datum->datum != NULL)
-    {
-        avro_datum_decref(l_datum->datum);
-        l_datum->datum = NULL;
+    LuaAvroValue  *l_value = luaL_checkudata(L, 1, MT_AVRO_VALUE);
+    if (l_value->should_free && l_value->value.self != NULL) {
+        avro_generic_value_free(&l_value->value);
     }
+    l_value->value.iface = NULL;
+    l_value->value.self = NULL;
+    l_value->should_free = false;
     return 0;
 }
 
 
 /**
- * Creates a new AvroDatum instance from a JSON string.
+ * Creates a new AvroValue instance from a JSON string.
  */
 
 static int
-l_datum_new(lua_State *L)
+l_value_new(lua_State *L)
 {
     /* TODO */
     lua_pushnil(L);
@@ -1058,6 +1013,7 @@ l_datum_new(lua_State *L)
 typedef struct _LuaAvroSchema
 {
     avro_schema_t  schema;
+    avro_value_iface_t  *iface;
 } LuaAvroSchema;
 
 
@@ -1068,6 +1024,7 @@ lua_avro_push_schema(lua_State *L, avro_schema_t schema)
 
     l_schema = lua_newuserdata(L, sizeof(LuaAvroSchema));
     l_schema->schema = avro_schema_incref(schema);
+    l_schema->iface = avro_generic_class_from_schema(schema);
     luaL_getmetatable(L, MT_AVRO_SCHEMA);
     lua_setmetatable(L, -2);
     return 1;
@@ -1083,16 +1040,16 @@ lua_avro_get_schema(lua_State *L, int index)
 
 
 /**
- * Creates a new AvroDatum for the given schema.
+ * Creates a new AvroValue for the given schema.
  */
 
 static int
-l_schema_new_datum(lua_State *L)
+l_schema_new_value(lua_State *L)
 {
-    avro_schema_t  schema = lua_avro_get_schema(L, 1);
-    avro_datum_t  datum = avro_datum_from_schema(schema);
-    lua_avro_push_datum(L, datum);
-    avro_datum_decref(datum);
+    LuaAvroSchema  *l_schema = luaL_checkudata(L, 1, MT_AVRO_SCHEMA);
+    avro_value_t  value;
+    check(avro_generic_value_new(l_schema->iface, &value));
+    lua_avro_push_value(L, &value, true);
     return 1;
 }
 
@@ -1118,10 +1075,13 @@ static int
 l_schema_gc(lua_State *L)
 {
     LuaAvroSchema  *l_schema = luaL_checkudata(L, 1, MT_AVRO_SCHEMA);
-    if (l_schema->schema != NULL)
-    {
+    if (l_schema->schema != NULL) {
         avro_schema_decref(l_schema->schema);
         l_schema->schema = NULL;
+    }
+    if (l_schema->iface != NULL) {
+        avro_value_iface_decref(l_schema->iface);
+        l_schema->iface = NULL;
     }
     return 0;
 }
@@ -1143,7 +1103,7 @@ l_schema_new(lua_State *L)
     int  rc = avro_schema_from_json(json_str, json_len, &schema, &schema_error);
     if (rc != 0)
     {
-        lua_pushstring(L, "Error parsing JSON schema");
+        lua_pushliteral(L, "Error parsing JSON schema");
         return lua_error(L);
     }
 
@@ -1163,8 +1123,7 @@ l_schema_new_array(lua_State *L)
     avro_schema_t  items_schema = lua_avro_get_schema(L, 1);
     avro_schema_t  schema = avro_schema_array(items_schema);
     if (schema == NULL) {
-       lua_pushstring(L, avro_strerror());
-       return lua_error(L);
+        return lua_avro_error(L);
     }
     lua_avro_push_schema(L, schema);
     avro_schema_decref(schema);
@@ -1173,45 +1132,48 @@ l_schema_new_array(lua_State *L)
 
 
 /*-----------------------------------------------------------------------
- * Lua access — resolvers
+ * Lua access — resolved writers
  */
 
 /**
- * The string used to identify the AvroResolver class's metatable in the
- * Lua registry.
+ * The string used to identify the AvroResolvedWriter class's metatable
+ * in the Lua registry.
  */
 
-#define MT_AVRO_RESOLVER "avro:AvroResolver"
+#define MT_AVRO_RESOLVED_WRITER "avro:AvroResolvedWriter"
 
-typedef struct _LuaAvroResolver
+typedef struct _LuaAvroResolvedWriter
 {
-    avro_consumer_t  *resolver;
-} LuaAvroResolver;
+    avro_value_iface_t  *resolver;
+    avro_value_t  value;
+} LuaAvroResolvedWriter;
 
 
 int
-lua_avro_push_resolver(lua_State *L, avro_consumer_t *resolver)
+lua_avro_push_resolver(lua_State *L, avro_value_iface_t *resolver)
 {
-    LuaAvroResolver  *l_resolver;
+    LuaAvroResolvedWriter  *l_resolver;
 
-    l_resolver = lua_newuserdata(L, sizeof(LuaAvroResolver));
+    l_resolver = lua_newuserdata(L, sizeof(LuaAvroResolvedWriter));
     l_resolver->resolver = resolver;
-    luaL_getmetatable(L, MT_AVRO_RESOLVER);
+    avro_resolved_writer_new_value(resolver, &l_resolver->value);
+    luaL_getmetatable(L, MT_AVRO_RESOLVED_WRITER);
     lua_setmetatable(L, -2);
     return 1;
 }
 
 
-avro_consumer_t *
+avro_value_iface_t *
 lua_avro_get_resolver(lua_State *L, int index)
 {
-    LuaAvroResolver  *l_resolver = luaL_checkudata(L, index, MT_AVRO_RESOLVER);
+    LuaAvroResolvedWriter  *l_resolver =
+        luaL_checkudata(L, index, MT_AVRO_RESOLVED_WRITER);
     return l_resolver->resolver;
 }
 
 
 /**
- * Creates a new AvroResolver for the given schemas.
+ * Creates a new AvroResolvedWriter for the given schemas.
  */
 
 static int
@@ -1219,11 +1181,10 @@ l_resolver_new(lua_State *L)
 {
     avro_schema_t  writer_schema = lua_avro_get_schema(L, 1);
     avro_schema_t  reader_schema = lua_avro_get_schema(L, 2);
-    avro_consumer_t  *resolver = avro_resolver_new(writer_schema, reader_schema);
+    avro_value_iface_t  *resolver =
+        avro_resolved_writer_new(writer_schema, reader_schema);
     if (resolver == NULL) {
-        lua_pushnil(L);
-        lua_pushstring(L, avro_strerror());
-        return 2;
+        return lua_return_avro_error(L);
     } else {
         lua_avro_push_resolver(L, resolver);
         return 1;
@@ -1232,16 +1193,21 @@ l_resolver_new(lua_State *L)
 
 
 /**
- * Finalizes an AvroResolver instance.
+ * Finalizes an AvroResolvedWriter instance.
  */
 
 static int
 l_resolver_gc(lua_State *L)
 {
-    LuaAvroResolver  *l_resolver = luaL_checkudata(L, 1, MT_AVRO_RESOLVER);
-    if (l_resolver->resolver != NULL)
-    {
-        avro_consumer_free(l_resolver->resolver);
+    LuaAvroResolvedWriter  *l_resolver =
+        luaL_checkudata(L, 1, MT_AVRO_RESOLVED_WRITER);
+    if (l_resolver->value.self != NULL) {
+        avro_resolved_writer_free_value(&l_resolver->value);
+        l_resolver->value.iface = NULL;
+        l_resolver->value.self = NULL;
+    }
+    if (l_resolver->resolver != NULL) {
+        avro_value_iface_decref(l_resolver->resolver);
         l_resolver->resolver = NULL;
     }
     return 0;
@@ -1255,19 +1221,19 @@ l_resolver_gc(lua_State *L)
 static int
 l_resolver_decode(lua_State *L)
 {
-    LuaAvroResolver  *l_resolver = luaL_checkudata(L, 1, MT_AVRO_RESOLVER);
+    LuaAvroResolvedWriter  *l_resolver =
+        luaL_checkudata(L, 1, MT_AVRO_RESOLVED_WRITER);
     size_t  size = 0;
     const char  *buf = luaL_checklstring(L, 2, &size);
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 3, MT_AVRO_DATUM);
+    avro_value_t  *value = lua_avro_get_value(L, 3);
 
     avro_reader_t  reader = avro_reader_memory(buf, size);
-    int rc = avro_consume_binary(reader, l_resolver->resolver, l_datum->datum);
+    avro_resolved_writer_set_dest(&l_resolver->value, value);
+    int rc = avro_value_read(reader, &l_resolver->value);
     avro_reader_free(reader);
 
     if (rc != 0) {
-        lua_pushnil(L);
-        lua_pushstring(L, avro_strerror());
-        return 2;
+        return lua_return_avro_error(L);
     }
 
     lua_pushboolean(L, true);
@@ -1284,24 +1250,24 @@ l_resolver_decode(lua_State *L)
  */
 
 static int
-l_datum_decode_raw(lua_State *L)
+l_value_decode_raw(lua_State *L)
 {
-    LuaAvroResolver  *l_resolver = luaL_checkudata(L, 1, MT_AVRO_RESOLVER);
+    LuaAvroResolvedWriter  *l_resolver =
+        luaL_checkudata(L, 1, MT_AVRO_RESOLVED_WRITER);
     if (!lua_islightuserdata(L, 2)) {
         return luaL_error(L, "Destination buffer should be a light userdata");
     }
     void  *buf = lua_touserdata(L, 2);
     size_t  size = luaL_checkinteger(L, 3);
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 4, MT_AVRO_DATUM);
+    avro_value_t  *value = lua_avro_get_value(L, 4);
 
     avro_reader_t  reader = avro_reader_memory(buf, size);
-    int rc = avro_consume_binary(reader, l_resolver->resolver, l_datum->datum);
+    avro_resolved_writer_set_dest(&l_resolver->value, value);
+    int rc = avro_value_read(reader, &l_resolver->value);
     avro_reader_free(reader);
 
     if (rc != 0) {
-        lua_pushnil(L);
-        lua_pushstring(L, avro_strerror());
-        return 2;
+        return lua_return_avro_error(L);
     }
 
     lua_pushboolean(L, true);
@@ -1324,8 +1290,9 @@ l_datum_decode_raw(lua_State *L)
 typedef struct _LuaAvroDataInputFile
 {
     avro_file_reader_t  reader;
+    avro_schema_t  wschema;
+    avro_value_iface_t  *iface;
 } LuaAvroDataInputFile;
-
 
 int
 lua_avro_push_file_reader(lua_State *L, avro_file_reader_t reader)
@@ -1334,6 +1301,8 @@ lua_avro_push_file_reader(lua_State *L, avro_file_reader_t reader)
 
     l_file = lua_newuserdata(L, sizeof(LuaAvroDataInputFile));
     l_file->reader = reader;
+    l_file->wschema = avro_file_reader_get_writer_schema(reader);
+    l_file->iface = avro_generic_class_from_schema(l_file->wschema);
     luaL_getmetatable(L, MT_AVRO_DATA_INPUT_FILE);
     lua_setmetatable(L, -2);
     return 1;
@@ -1362,6 +1331,11 @@ l_input_file_close(lua_State *L)
         avro_file_reader_close(l_file->reader);
         l_file->reader = NULL;
     }
+    l_file->wschema = NULL;
+    if (l_file->iface != NULL) {
+        avro_value_iface_decref(l_file->iface);
+        l_file->iface = NULL;
+    }
     return 0;
 }
 
@@ -1373,29 +1347,27 @@ static int
 l_input_file_read(lua_State *L)
 {
     int  nargs = lua_gettop(L);
-    avro_file_reader_t  reader = lua_avro_get_file_reader(L, 1);
+    LuaAvroDataInputFile  *l_file =
+        luaL_checkudata(L, 1, MT_AVRO_DATA_INPUT_FILE);
 
     if (nargs == 1) {
         /* No Value instance given, so create one. */
-        avro_datum_t  datum;
-        int  rc = avro_file_reader_read(reader, NULL, &datum);
+        avro_value_t  value;
+        check(avro_generic_value_new(l_file->iface, &value));
+        int  rc = avro_file_reader_read_value(l_file->reader, &value);
         if (rc != 0) {
-            lua_pushnil(L);
-            lua_pushstring(L, avro_strerror());
-            return 2;
+            return lua_return_avro_error(L);
         }
-        lua_avro_push_datum(L, datum);
+        lua_avro_push_value(L, &value, true);
         return 1;
     }
 
     else {
-        /* Otherwise read into the given datum. */
-        LuaAvroDatum  *l_datum = luaL_checkudata(L, 2, MT_AVRO_DATUM);
-        int  rc = avro_file_reader_read(reader, NULL, &l_datum->datum);
+        /* Otherwise read into the given value. */
+        avro_value_t  *value = lua_avro_get_value(L, 2);
+        int  rc = avro_file_reader_read_value(l_file->reader, value);
         if (rc != 0) {
-            lua_pushnil(L);
-            lua_pushstring(L, avro_strerror());
-            return 2;
+            return lua_return_avro_error(L);
         }
         lua_pushvalue(L, 2);
         return 1;
@@ -1464,11 +1436,8 @@ l_output_file_write(lua_State *L)
 {
     avro_file_writer_t  writer = lua_avro_get_file_writer(L, 1);
 
-    LuaAvroDatum  *l_datum = luaL_checkudata(L, 2, MT_AVRO_DATUM);
-    int  rc = avro_file_writer_append(writer, l_datum->datum);
-    if (rc != 0) {
-        return luaL_error(L, "%s", avro_strerror());
-    }
+    avro_value_t  *value = lua_avro_get_value(L, 2);
+    check(avro_file_writer_append_value(writer, value));
     return 0;
 }
 
@@ -1490,9 +1459,7 @@ l_file_open(lua_State *L)
         avro_file_reader_t  reader;
         int  rc = avro_file_reader(path, &reader);
         if (rc != 0) {
-            lua_pushnil(L);
-            lua_pushstring(L, avro_strerror());
-            return 2;
+            return lua_return_avro_error(L);
         }
         lua_avro_push_file_reader(L, reader);
         return 1;
@@ -1503,9 +1470,7 @@ l_file_open(lua_State *L)
         avro_file_writer_t  writer;
         int  rc = avro_file_writer_create(path, schema, &writer);
         if (rc != 0) {
-            lua_pushnil(L);
-            lua_pushstring(L, avro_strerror());
-            return 2;
+            return lua_return_avro_error(L);
         }
         lua_avro_push_file_writer(L, writer);
         return 1;
@@ -1519,24 +1484,24 @@ l_file_open(lua_State *L)
  * Lua access — module
  */
 
-static const luaL_Reg  datum_methods[] =
+static const luaL_Reg  value_methods[] =
 {
-    {"append", l_datum_append},
-    {"discriminant", l_datum_discriminant},
-    {"encode", l_datum_encode},
-    {"encoded_size", l_datum_encoded_size},
-    {"get", l_datum_get},
-    {"iterate", l_datum_iterate},
-    {"scalar", l_datum_scalar},
-    {"set", l_datum_set},
-    {"type", l_datum_type},
+    {"append", l_value_append},
+    {"discriminant", l_value_discriminant},
+    {"encode", l_value_encode},
+    {"encoded_size", l_value_encoded_size},
+    {"get", l_value_get},
+    {"iterate", l_value_iterate},
+    {"scalar", l_value_scalar},
+    {"set", l_value_set},
+    {"type", l_value_type},
     {NULL, NULL}
 };
 
 
 static const luaL_Reg  schema_methods[] =
 {
-    {"new_value", l_schema_new_datum},
+    {"new_value", l_schema_new_value},
     {"type", l_schema_type},
     {NULL, NULL}
 };
@@ -1568,12 +1533,12 @@ static const luaL_Reg  output_file_methods[] =
 static const luaL_Reg  mod_methods[] =
 {
     {"ArraySchema", l_schema_new_array},
-    {"Resolver", l_resolver_new},
+    {"ResolvedWriter", l_resolver_new},
     {"Schema", l_schema_new},
-    {"Value", l_datum_new},
+    {"Value", l_value_new},
     {"open", l_file_open},
-    {"raw_decode_value", l_datum_decode_raw},
-    {"raw_encode_value", l_datum_encode_raw},
+    {"raw_decode_value", l_value_decode_raw},
+    {"raw_encode_value", l_value_encode_raw},
     {NULL, NULL}
 };
 
@@ -1600,20 +1565,20 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
-    /* AvroDatum metatables */
+    /* AvroValue metatables */
 
-    luaL_newmetatable(L, MT_AVRO_DATUM_METHODS);
-    luaL_register(L, NULL, datum_methods);
+    luaL_newmetatable(L, MT_AVRO_VALUE_METHODS);
+    luaL_register(L, NULL, value_methods);
     lua_pop(L, 1);
 
-    luaL_newmetatable(L, MT_AVRO_DATUM);
-    lua_pushcfunction(L, l_datum_tostring);
+    luaL_newmetatable(L, MT_AVRO_VALUE);
+    lua_pushcfunction(L, l_value_tostring);
     lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, l_datum_index);
+    lua_pushcfunction(L, l_value_index);
     lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, l_datum_newindex);
+    lua_pushcfunction(L, l_value_newindex);
     lua_setfield(L, -2, "__newindex");
-    lua_pushcfunction(L, l_datum_gc);
+    lua_pushcfunction(L, l_value_gc);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
@@ -1622,9 +1587,9 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
-    /* AvroResolver metatable */
+    /* AvroResolvedWriter metatable */
 
-    luaL_newmetatable(L, MT_AVRO_RESOLVER);
+    luaL_newmetatable(L, MT_AVRO_RESOLVED_WRITER);
     lua_createtable(L, 0, sizeof(resolver_methods) / sizeof(luaL_reg) - 1);
     luaL_register(L, NULL, resolver_methods);
     lua_setfield(L, -2, "__index");

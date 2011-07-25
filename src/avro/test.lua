@@ -103,13 +103,13 @@ do
 end
 
 ------------------------------------------------------------------------
--- Resolver()
+-- ResolvedWriter()
 
 do
    local function test_good_resolver(json1, json2)
       local schema1 = A.Schema(json1)
       local schema2 = A.Schema(json2)
-      local resolver = assert(A.Resolver(schema1, schema2))
+      local resolver = assert(A.ResolvedWriter(schema1, schema2))
    end
 
    local function test_good_prim(prim_type1, prim_type2)
@@ -120,7 +120,7 @@ do
    local function test_bad_resolver(json1, json2)
       local schema1 = A.Schema(json1)
       local schema2 = A.Schema(json2)
-      local resolver = assert(not A.Resolver(schema1, schema2))
+      local resolver = assert(not A.ResolvedWriter(schema1, schema2))
    end
 
    local function test_bad_prim(prim_type1, prim_type2)
@@ -166,7 +166,7 @@ do
    local function test_boolean(buf, expected_prim)
       local schema = A.Schema([[{"type": "boolean"}]])
       local actual = schema:new_value()
-      local resolver = assert(A.Resolver(schema, schema))
+      local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
    end
@@ -177,7 +177,7 @@ do
    local function test_int(buf, expected_prim)
       local schema = A.Schema([[{"type": "int"}]])
       local actual = schema:new_value()
-      local resolver = assert(A.Resolver(schema, schema))
+      local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
    end
