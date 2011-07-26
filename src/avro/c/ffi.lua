@@ -373,6 +373,9 @@ avro_schema_union_branch(avro_schema_t schema, int discriminant);
 -- avro/value.h
 
 ffi.cdef [[
+uint32_t
+avro_value_hash(avro_value_t *value);
+
 int
 avro_value_to_json(const avro_value_t *value, int one_line, char **str);
 ]]
@@ -934,6 +937,10 @@ end
 
 function Value_class:type()
    return self.iface.get_type(self.iface, self.self)
+end
+
+function Value_class:hash()
+   return avro.avro_value_hash(self)
 end
 
 function Value_mt:__tostring()

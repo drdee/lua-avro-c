@@ -9,6 +9,7 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -252,6 +253,20 @@ lua_avro_push_scalar_or_value(lua_State *L, avro_value_t *value,
             return 1;
         }
     }
+}
+
+
+/**
+ * Returns the hash of an AvroValue instance.
+ */
+
+static int
+l_value_hash(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    uint32_t  hash = avro_value_hash(value);
+    lua_pushinteger(L, hash);
+    return 1;
 }
 
 
@@ -1487,6 +1502,7 @@ static const luaL_Reg  value_methods[] =
     {"encode", l_value_encode},
     {"encoded_size", l_value_encoded_size},
     {"get", l_value_get},
+    {"hash", l_value_hash},
     {"iterate", l_value_iterate},
     {"scalar", l_value_scalar},
     {"set", l_value_set},

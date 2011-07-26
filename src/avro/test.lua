@@ -67,14 +67,17 @@ do
       local items_schema = A.Schema([[{"type": "]]..prim_type..[["}]])
       local schema = A.ArraySchema(items_schema)
       local array = schema:new_value()
+      local array2 = schema:new_value()
       for _,val in ipairs(expected) do
          array:append(val)
+         array2:append(val)
       end
       local actual = {}
       for _,element in array:iterate() do
          table.insert(actual, element)
       end
       assert(deepcompare(actual, expected))
+      assert(array:hash() == array2:hash())
    end
 
    test_array("int", { 1,2,3,4 })
@@ -88,14 +91,17 @@ do
    local function test_map(prim_type, expected)
       local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
       local map = schema:new_value()
+      local map2 = schema:new_value()
       for key,val in pairs(expected) do
          map:set(key, val)
+         map2:set(key, val)
       end
       local actual = {}
       for key,element in map:iterate() do
          actual[key] = element
       end
       assert(deepcompare(actual, expected))
+      assert(map:hash() == map2:hash())
    end
 
    test_map("int", { a=1,b=2,c=3,d=4 })
