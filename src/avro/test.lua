@@ -77,6 +77,7 @@ do
          table.insert(actual, element)
       end
       assert(deepcompare(actual, expected))
+      assert(array == array2)
       assert(array:hash() == array2:hash())
    end
 
@@ -101,6 +102,7 @@ do
          actual[key] = element
       end
       assert(deepcompare(actual, expected))
+      assert(map == map2)
       assert(map:hash() == map2:hash())
    end
 

@@ -373,6 +373,9 @@ avro_schema_union_branch(avro_schema_t schema, int discriminant);
 -- avro/value.h
 
 ffi.cdef [[
+int
+avro_value_equal(avro_value_t *val1, avro_value_t *val2);
+
 uint32_t
 avro_value_hash(avro_value_t *value);
 
@@ -970,6 +973,11 @@ function Value_mt:__newindex(idx)
 
    -- Otherwise defer to the set() method.
    return Value_class.set(self, idx)
+end
+
+function Value_mt:__eq(other)
+   local eq = avro.avro_value_equal(self, other)
+   return eq ~= 0
 end
 
 function Value_mt:__gc()

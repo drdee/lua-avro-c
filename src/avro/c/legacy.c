@@ -146,6 +146,20 @@ l_value_tostring(lua_State *L)
 
 
 /**
+ * Compares two values for equality.
+ */
+
+static int
+l_value_eq(lua_State *L)
+{
+    avro_value_t  *value1 = lua_avro_get_value(L, 1);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+    lua_pushboolean(L, avro_value_equal(value1, value2));
+    return 1;
+}
+
+
+/**
  * If @ref value is an Avro scalar, we push the Lua equivalent onto
  * the stack.  If the value is not a scalar, and @ref require_scalar
  * is true, we raise a Lua error.  Otherwise, we push a new AvroValue
@@ -1584,6 +1598,8 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_pop(L, 1);
 
     luaL_newmetatable(L, MT_AVRO_VALUE);
+    lua_pushcfunction(L, l_value_eq);
+    lua_setfield(L, -2, "__eq");
     lua_pushcfunction(L, l_value_tostring);
     lua_setfield(L, -2, "__tostring");
     lua_pushcfunction(L, l_value_index);
