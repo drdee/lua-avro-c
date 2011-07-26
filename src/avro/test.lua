@@ -70,11 +70,15 @@ do
       for _,val in ipairs(expected) do
          array:append(val)
       end
+      local array2 = schema:new_value()
+      array2:copy_from(array)
       local actual = {}
       for _,element in array:iterate() do
          table.insert(actual, element)
       end
       assert(deepcompare(actual, expected))
+      assert(array == array2)
+      assert(array:hash() == array2:hash())
    end
 
    test_array("int", { 1,2,3,4 })
@@ -91,11 +95,15 @@ do
       for key,val in pairs(expected) do
          map:set(key, val)
       end
+      local map2 = schema:new_value()
+      map2:copy_from(map)
       local actual = {}
       for key,element in map:iterate() do
          actual[key] = element
       end
       assert(deepcompare(actual, expected))
+      assert(map == map2)
+      assert(map:hash() == map2:hash())
    end
 
    test_map("int", { a=1,b=2,c=3,d=4 })
@@ -103,13 +111,74 @@ do
 end
 
 ------------------------------------------------------------------------
--- Resolver()
+-- ResolvedReader()
+
+do
+   local function test_good_scalar(json1, json2, scalar)
+      local schema1 = A.Schema([[{"type": "]]..json1..[["}]])
+      local schema2 = A.Schema([[{"type": "]]..json2..[["}]])
+      local resolver = assert(A.ResolvedReader(schema1, schema2))
+
+      local value = schema1:new_value()
+      local resolved = resolver:new_value()
+      resolved:set_source(value)
+
+      value:set(scalar)
+      assert(resolved:scalar() == scalar)
+   end
+
+   test_good_scalar("int", "int", 42)
+   test_good_scalar("int", "long", 42)
+
+   local schema1 = A.Schema [[
+     {
+       "type": "record",
+       "name": "foo",
+       "fields": [
+         {"name": "a", "type": "int"},
+         {"name": "b", "type": "double"}
+       ]
+     }
+   ]]
+
+   local schema2 = A.Schema [[
+     {
+       "type": "record",
+       "name": "foo",
+       "fields": [
+         {"name": "a", "type": "int"}
+       ]
+     }
+   ]]
+
+   local resolver = assert(A.ResolvedReader(schema1, schema2))
+
+   local val1 = schema1:new_value()
+   val1.a = 1
+   val1.b = 42
+
+   local val2 = schema1:new_value()
+   val2.a = 1
+   val2.b = 100
+
+   local resolved1 = resolver:new_value()
+   resolved1:set_source(val1)
+
+   local resolved2 = resolver:new_value()
+   resolved2:set_source(val2)
+
+   assert(val1 ~= val2)
+   assert(resolved1 == resolved2)
+end
+
+------------------------------------------------------------------------
+-- ResolvedWriter()
 
 do
    local function test_good_resolver(json1, json2)
       local schema1 = A.Schema(json1)
       local schema2 = A.Schema(json2)
-      local resolver = assert(A.Resolver(schema1, schema2))
+      local resolver = assert(A.ResolvedWriter(schema1, schema2))
    end
 
    local function test_good_prim(prim_type1, prim_type2)
@@ -120,7 +189,7 @@ do
    local function test_bad_resolver(json1, json2)
       local schema1 = A.Schema(json1)
       local schema2 = A.Schema(json2)
-      local resolver = assert(not A.Resolver(schema1, schema2))
+      local resolver = assert(not A.ResolvedWriter(schema1, schema2))
    end
 
    local function test_bad_prim(prim_type1, prim_type2)
@@ -166,7 +235,7 @@ do
    local function test_boolean(buf, expected_prim)
       local schema = A.Schema([[{"type": "boolean"}]])
       local actual = schema:new_value()
-      local resolver = assert(A.Resolver(schema, schema))
+      local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
    end
@@ -177,7 +246,7 @@ do
    local function test_int(buf, expected_prim)
       local schema = A.Schema([[{"type": "int"}]])
       local actual = schema:new_value()
-      local resolver = assert(A.Resolver(schema, schema))
+      local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
    end

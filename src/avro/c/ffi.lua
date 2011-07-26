@@ -24,6 +24,9 @@ module "avro.c.ffi"
 local avro = ffi.load("avro")
 
 ffi.cdef [[
+void *malloc(size_t size);
+void free(void *ptr);
+
 typedef int  avro_type_t;
 typedef int  avro_class_t;
 
@@ -45,33 +48,154 @@ local function avro_error()
    error(ffi.string(avro.avro_strerror()))
 end
 
+
+------------------------------------------------------------------------
+-- Avro value interface
+
+-- Note that the avro_value_t definition below does not exactly match
+-- the one from the Avro C library.  We need to store an additional
+-- field, indicating whether the value was created with
+-- avro_generic_value_new (and therefore should be freed in its __gc
+-- metamethod).  Ideally, we'd use a wrapper struct like this:
+--
+-- typedef struct LuaAvroValue {
+--     avro_value_t  value;
+--     int  destructor;
+-- } LuaAvroValue;
+--
+-- Unfortunately, the LuaJIT compiler doesn't currently support
+-- JIT-compiling nested structures, and since Avro values will be used
+-- in a lot of tight loops, it's important to get those compiled to
+-- machine code.
+--
+-- So to get around this, we're incorporating the extra field into our
+-- own definition of avro_value_t.  The beginning of the struct still
+-- matches what the library expects, so we should be okay.
+
+local NO_DESTRUCTOR = 0
+local GENERIC_DESTRUCTOR = 1
+local RESOLVED_READER_DESTRUCTOR = 2
+
+ffi.cdef [[
+typedef struct avro_value_iface  avro_value_iface_t;
+
+typedef struct avro_value {
+	const avro_value_iface_t  *iface;
+	void  *self;
+        int  destructor;
+} avro_value_t;
+
+typedef avro_obj_t  *avro_schema_t;
+typedef struct avro_wrapped_buffer  avro_wrapped_buffer_t;
+
+struct avro_value_iface {
+	avro_value_iface_t *(*incref)(avro_value_iface_t *iface);
+	void (*decref)(avro_value_iface_t *iface);
+	int (*reset)(const avro_value_iface_t *iface, void *self);
+	avro_type_t (*get_type)(const avro_value_iface_t *iface, const void *self);
+	avro_schema_t (*get_schema)(const avro_value_iface_t *iface, const void *self);
+	int (*get_boolean)(const avro_value_iface_t *iface,
+			   const void *self, int *out);
+	int (*get_bytes)(const avro_value_iface_t *iface,
+			 const void *self, const void **buf, size_t *size);
+	int (*grab_bytes)(const avro_value_iface_t *iface,
+			  const void *self, avro_wrapped_buffer_t *dest);
+	int (*get_double)(const avro_value_iface_t *iface,
+			  const void *self, double *out);
+	int (*get_float)(const avro_value_iface_t *iface,
+			 const void *self, float *out);
+	int (*get_int)(const avro_value_iface_t *iface,
+		       const void *self, int32_t *out);
+	int (*get_long)(const avro_value_iface_t *iface,
+			const void *self, int64_t *out);
+	int (*get_null)(const avro_value_iface_t *iface,
+			const void *self);
+	int (*get_string)(const avro_value_iface_t *iface,
+			  const void *self, const char **str, size_t *size);
+	int (*grab_string)(const avro_value_iface_t *iface,
+			   const void *self, avro_wrapped_buffer_t *dest);
+	int (*get_enum)(const avro_value_iface_t *iface,
+			const void *self, int *out);
+	int (*get_fixed)(const avro_value_iface_t *iface,
+			 const void *self, const void **buf, size_t *size);
+	int (*grab_fixed)(const avro_value_iface_t *iface,
+			  const void *self, avro_wrapped_buffer_t *dest);
+	int (*set_boolean)(const avro_value_iface_t *iface,
+			   void *self, int val);
+	int (*set_bytes)(const avro_value_iface_t *iface,
+			 void *self, void *buf, size_t size);
+	int (*give_bytes)(const avro_value_iface_t *iface,
+			  void *self, avro_wrapped_buffer_t *buf);
+	int (*set_double)(const avro_value_iface_t *iface,
+			  void *self, double val);
+	int (*set_float)(const avro_value_iface_t *iface,
+			 void *self, float val);
+	int (*set_int)(const avro_value_iface_t *iface,
+		       void *self, int32_t val);
+	int (*set_long)(const avro_value_iface_t *iface,
+			void *self, int64_t val);
+	int (*set_null)(const avro_value_iface_t *iface, void *self);
+	int (*set_string)(const avro_value_iface_t *iface,
+			  void *self, char *str);
+	int (*set_string_len)(const avro_value_iface_t *iface,
+			      void *self, char *str, size_t size);
+	int (*give_string_len)(const avro_value_iface_t *iface,
+			       void *self, avro_wrapped_buffer_t *buf);
+	int (*set_enum)(const avro_value_iface_t *iface,
+			void *self, int val);
+	int (*set_fixed)(const avro_value_iface_t *iface,
+			 void *self, void *buf, size_t size);
+	int (*give_fixed)(const avro_value_iface_t *iface,
+			  void *self, avro_wrapped_buffer_t *buf);
+	int (*get_size)(const avro_value_iface_t *iface,
+			const void *self, size_t *size);
+	int (*get_by_index)(const avro_value_iface_t *iface,
+			    const void *self, size_t index,
+			    avro_value_t *child, const char **name);
+	int (*get_by_name)(const avro_value_iface_t *iface,
+			   const void *self, const char *name,
+			   avro_value_t *child, size_t *index);
+	int (*get_discriminant)(const avro_value_iface_t *iface,
+				const void *self, int *out);
+	int (*get_current_branch)(const avro_value_iface_t *iface,
+				  const void *self, avro_value_t *branch);
+	int (*append)(const avro_value_iface_t *iface,
+		      void *self, avro_value_t *child_out, size_t *new_index);
+	int (*add)(const avro_value_iface_t *iface,
+		   void *self, const char *key,
+		   avro_value_t *child, size_t *index, int *is_new);
+	int (*set_branch)(const avro_value_iface_t *iface,
+			  void *self, int discriminant,
+			  avro_value_t *branch);
+};
+]]
+
+
 ------------------------------------------------------------------------
 -- Forward declarations
 
 ffi.cdef [[
-typedef avro_obj_t  *avro_schema_t;
-
 typedef struct LuaAvroSchema {
     avro_schema_t  schema;
+    avro_value_iface_t  *iface;
 } LuaAvroSchema;
 
-typedef avro_obj_t  *avro_datum_t;
+typedef struct LuaAvroResolvedReader {
+    avro_value_iface_t  *resolver;
+} LuaAvroResolvedReader;
 
-typedef struct LuaAvroValue {
-    avro_datum_t  datum;
-} LuaAvroValue;
-
-typedef struct avro_consumer_t  avro_consumer_t;
-
-typedef struct LuaAvroResolver {
-    avro_consumer_t  *resolver;
-} LuaAvroResolver;
+typedef struct LuaAvroResolvedWriter {
+    avro_value_iface_t  *resolver;
+    avro_value_t  value;
+} LuaAvroResolvedWriter;
 
 typedef struct avro_file_reader_t_  *avro_file_reader_t;
 typedef struct avro_file_writer_t_  *avro_file_writer_t;
 
 typedef struct LuaAvroDataInputFile {
     avro_file_reader_t  reader;
+    avro_schema_t  wschema;
+    avro_value_iface_t  *iface;
 } LuaAvroDataInputFile;
 
 typedef struct LuaAvroDataOutputFile {
@@ -82,10 +206,10 @@ typedef struct LuaAvroDataOutputFile {
 local avro_schema_t = ffi.typeof([[avro_schema_t]])
 local LuaAvroSchema
 
-local avro_datum_t = ffi.typeof([[avro_datum_t]])
+local avro_value_t = ffi.typeof([[avro_value_t]])
 local LuaAvroValue
 
-local avro_consumer_t = ffi.typeof([[avro_consumer_t *]])
+--local avro_consumer_t = ffi.typeof([[avro_consumer_t *]])
 local LuaAvroConsumer
 
 local LuaAvroDataInputFile
@@ -121,6 +245,7 @@ typedef struct avro_reader_t  *avro_reader_t;
 typedef struct avro_writer_t  *avro_writer_t;
 ]]
 
+local char_p = ffi.typeof([=[ char * ]=])
 local char_p_ptr = ffi.typeof([=[ char *[1] ]=])
 local const_char_p_ptr = ffi.typeof([=[ const char *[1] ]=])
 local double_ptr = ffi.typeof([=[ double[1] ]=])
@@ -130,8 +255,11 @@ local int8_t_ptr = ffi.typeof([=[ int8_t[1] ]=])
 local int32_t_ptr = ffi.typeof([=[ int32_t[1] ]=])
 local int64_t_ptr = ffi.typeof([=[ int64_t[1] ]=])
 local size_t_ptr = ffi.typeof([=[ size_t[1] ]=])
+local void_p = ffi.typeof([=[ void * ]=])
+local void_p_ptr = ffi.typeof([=[ void *[1] ]=])
+local const_void_p_ptr = ffi.typeof([=[ const void *[1] ]=])
 
-local avro_datum_t_ptr = ffi.typeof([=[ avro_datum_t[1] ]=])
+--local avro_datum_t_ptr = ffi.typeof([=[ avro_datum_t[1] ]=])
 local avro_file_reader_t_ptr = ffi.typeof([=[ avro_file_reader_t[1] ]=])
 local avro_file_writer_t_ptr = ffi.typeof([=[ avro_file_writer_t[1] ]=])
 local avro_schema_t_ptr = ffi.typeof([=[ avro_schema_t[1] ]=])
@@ -141,70 +269,36 @@ local avro_schema_error_t_ptr = ffi.typeof([=[ avro_schema_error_t[1] ]=])
 ------------------------------------------------------------------------
 -- Function declarations
 
--- avro.h
+-- avro/generic.h
 
 ffi.cdef [[
-void *malloc(size_t size);
-void free(void *ptr);
+avro_value_iface_t *
+avro_generic_class_from_schema(avro_schema_t schema);
 
 int
-avro_array_append_datum(avro_datum_t array_datum, avro_datum_t datum);
-
-int
-avro_array_get(const avro_datum_t datum, int64_t index, avro_datum_t *value);
-
-size_t
-avro_array_size(const avro_datum_t datum);
-
-int
-avro_boolean_get(avro_datum_t datum, int8_t *val);
-
-int
-avro_boolean_set(avro_datum_t datum, int8_t val);
-
-int
-avro_bytes_get(avro_datum_t datum, char **val, int64_t *size);
-
-int
-avro_bytes_set(avro_datum_t datum, const char *val, const int64_t size);
+avro_generic_value_new(const avro_value_iface_t *iface, avro_value_t *dest);
 
 void
-avro_datum_decref(avro_datum_t schema);
+avro_generic_value_free(avro_value_t *self);
+]]
 
-avro_datum_t
-avro_datum_from_schema(const avro_schema_t schema);
+-- avro/io.h
 
-avro_schema_t
-avro_datum_get_schema(const avro_datum_t datum);
-
-int
-avro_datum_to_json(const avro_datum_t datum,
-                   int one_line, char **json_str);
-
-int
-avro_double_get(avro_datum_t datum, double *val);
-
-int
-avro_double_set(avro_datum_t datum, double val);
-
-const char *
-avro_enum_get_name(const avro_datum_t datum);
-
-int
-avro_enum_set_name(avro_datum_t datum, const char *val);
-
+ffi.cdef [[
 int
 avro_file_reader(const char *path, avro_file_reader_t *reader);
 
 int
 avro_file_reader_close(avro_file_reader_t reader);
 
-int
-avro_file_reader_read(avro_file_reader_t reader, avro_schema_t rschema,
-                      avro_datum_t *datum);
+avro_schema_t
+avro_file_reader_get_writer_schema(avro_file_reader_t reader);
 
 int
-avro_file_writer_append(avro_file_writer_t writer, avro_datum_t datum);
+avro_file_reader_read_value(avro_file_reader_t reader, avro_value_t *dest);
+
+int
+avro_file_writer_append_value(avro_file_writer_t writer, avro_value_t *src);
 
 int
 avro_file_writer_close(avro_file_writer_t writer);
@@ -212,41 +306,6 @@ avro_file_writer_close(avro_file_writer_t writer);
 int
 avro_file_writer_create(const char *path, avro_schema_t schema,
                         avro_file_writer_t *writer);
-int
-avro_fixed_get(avro_datum_t datum, char **val, int64_t *size);
-
-int
-avro_fixed_set(avro_datum_t datum, const char *val, int64_t size);
-
-int
-avro_float_get(avro_datum_t datum, float *val);
-
-int
-avro_float_set(avro_datum_t datum, float val);
-
-int
-avro_int32_get(avro_datum_t datum, int32_t *val);
-
-int
-avro_int32_set(avro_datum_t datum, int32_t val);
-
-int
-avro_int64_get(avro_datum_t datum, int64_t *val);
-
-int
-avro_int64_set(avro_datum_t datum, int64_t val);
-
-int
-avro_map_get(const avro_datum_t datum, const char *key, avro_datum_t *value);
-
-int
-avro_map_get_key(const avro_datum_t datum, int index, const char **key);
-
-int
-avro_map_set(avro_datum_t datum, const char *key, avro_datum_t value);
-
-size_t
-avro_map_size(const avro_datum_t datum);
 
 avro_reader_t
 avro_reader_memory(const char *buf, int64_t len);
@@ -255,8 +314,54 @@ void
 avro_reader_free(avro_reader_t reader);
 
 int
-avro_record_get(const avro_datum_t datum, const char *name, avro_datum_t *value);
+avro_value_read(avro_reader_t reader, avro_value_t *dest);
 
+int
+avro_value_write(avro_writer_t writer, avro_value_t *src);
+
+int
+avro_value_sizeof(avro_value_t *src, size_t *size);
+
+avro_writer_t
+avro_writer_memory(char *buf, int64_t len);
+
+void
+avro_writer_free(avro_writer_t writer);
+]]
+
+-- avro/resolver.h
+
+ffi.cdef [[
+avro_value_iface_t *
+avro_resolved_reader_new(avro_schema_t wschema, avro_schema_t rschema);
+
+int
+avro_resolved_reader_new_value(const avro_value_iface_t *iface,
+                               avro_value_t *value);
+
+void
+avro_resolved_reader_free_value(avro_value_t *self);
+
+void
+avro_resolved_reader_set_source(avro_value_t *self, avro_value_t *src);
+
+avro_value_iface_t *
+avro_resolved_writer_new(avro_schema_t wschema, avro_schema_t rschema);
+
+int
+avro_resolved_writer_new_value(const avro_value_iface_t *iface,
+                               avro_value_t *value);
+
+void
+avro_resolved_writer_free_value(avro_value_t *self);
+
+void
+avro_resolved_writer_set_dest(avro_value_t *self, avro_value_t *dest);
+]]
+
+-- avro/schema.h
+
+ffi.cdef [[
 avro_schema_t
 avro_schema_array(const avro_schema_t items);
 
@@ -265,6 +370,12 @@ avro_schema_array_items(avro_schema_t schema);
 
 void
 avro_schema_decref(avro_schema_t schema);
+
+const char *
+avro_schema_enum_get(const avro_schema_t schema, int index);
+
+int
+avro_schema_enum_get_by_name(const avro_schema_t schema, const char *name);
 
 int
 avro_schema_from_json(const char *json_str, const int32_t json_len,
@@ -278,50 +389,22 @@ avro_schema_type_name(const avro_schema_t schema);
 
 avro_schema_t
 avro_schema_union_branch(avro_schema_t schema, int discriminant);
-
-int
-avro_string_get(avro_datum_t datum, char **val);
-
-int
-avro_string_set(avro_datum_t datum, const char *val);
-
-avro_datum_t
-avro_union_current_branch(avro_datum_t datum);
-
-int64_t
-avro_union_discriminant(const avro_datum_t datum);
-
-int
-avro_union_set_discriminant(avro_datum_t datum, int discriminant,
-                            avro_datum_t *branch);
-
-avro_writer_t
-avro_writer_memory(char *buf, int64_t len);
-
-void
-avro_writer_free(avro_writer_t writer);
 ]]
 
--- avro/consumer.h
+-- avro/value.h
 
 ffi.cdef [[
-void
-avro_consumer_free(avro_consumer_t *consumer);
+int
+avro_value_copy(avro_value_t *dest, avro_value_t *src);
 
 int
-avro_consume_binary(avro_reader_t reader, avro_consumer_t *consumer, void *ud);
+avro_value_equal(avro_value_t *val1, avro_value_t *val2);
+
+uint32_t
+avro_value_hash(avro_value_t *value);
 
 int
-avro_consume_datum(const avro_datum_t datum, avro_consumer_t *consumer, void *ud);
-
-avro_consumer_t *
-avro_encoding_consumer_new(void);
-
-avro_consumer_t *
-avro_resolver_new(avro_schema_t writer, avro_schema_t reader);
-
-avro_consumer_t *
-avro_sizeof_consumer_new(void);
+avro_value_to_json(const avro_value_t *value, int one_line, char **str);
 ]]
 
 ------------------------------------------------------------------------
@@ -331,9 +414,11 @@ local Schema_class = {}
 local Schema_mt = { __index = Schema_class }
 
 function Schema_class:new_value()
-   local datum = avro.avro_datum_from_schema(self.schema)
-   if datum == nil then avro_error() end
-   return LuaAvroValue(datum)
+   local value = LuaAvroValue()
+   local rc = avro.avro_generic_value_new(self.iface, value)
+   if rc ~= 0 then avro_error() end
+   value.destructor = GENERIC_DESTRUCTOR
+   return value
 end
 
 function Schema_class:type()
@@ -345,6 +430,17 @@ function Schema_mt:__gc()
       avro.avro_schema_decref(self.schema)
       self.schema = nil
    end
+   if self.iface ~= nil then
+      if self.iface.decref ~= nil then
+         self.iface.decref(self.iface)
+      end
+      self.iface = nil
+   end
+end
+
+local function new_schema(schema)
+   local iface = avro.avro_generic_class_from_schema(schema)
+   return LuaAvroSchema(schema, iface)
 end
 
 function Schema(json)
@@ -353,13 +449,13 @@ function Schema(json)
    local schema_error = ffi.new(avro_schema_error_t_ptr)
    local rc = avro.avro_schema_from_json(json, json_len, schema, schema_error)
    if rc ~= 0 then avro_error() end
-   return LuaAvroSchema(schema[0])
+   return new_schema(schema[0])
 end
 
 function ArraySchema(items)
    local schema = avro.avro_schema_array(items.schema)
    if schema == nil then avro_error() end
-   return LuaAvroSchema(schema)
+   return new_schema(schema)
 end
 
 LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
@@ -370,94 +466,201 @@ LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 local Value_class = {}
 local Value_mt = {}
 
+local v_char_p = ffi.new(char_p_ptr)
+local v_const_char_p = ffi.new(const_char_p_ptr)
+local v_double = ffi.new(double_ptr)
+local v_float = ffi.new(float_ptr)
+local v_int = ffi.new(int_ptr)
+local v_int32 = ffi.new(int32_t_ptr)
+local v_int64 = ffi.new(int64_t_ptr)
+local v_size = ffi.new(size_t_ptr)
+local v_const_void_p = ffi.new(const_void_p_ptr)
+
 -- A helper method that returns the Lua equivalent for scalar values.
-local function lua_scalar(datum)
-   local datum_type = datum[0].type
-   if datum_type == BOOLEAN then
-      local val = ffi.new(int8_t_ptr)
-      avro.avro_boolean_get(datum, val)
-      return true, val[0] ~= 0
-   elseif datum_type == BYTES then
-      local val = ffi.new(char_p_ptr)
+local function lua_scalar(value)
+   local value_type = value:type()
+   if value_type == BOOLEAN then
+      if value.iface.get_boolean == nil then
+         return false, "No implementation for get_boolean"
+      end
+      local rc = value.iface.get_boolean(value.iface, value.self, v_int)
+      if rc ~= 0 then avro_error() end
+      return true, v_int[0] ~= 0
+   elseif value_type == BYTES then
       local size = ffi.new(int64_t_ptr)
-      avro.avro_bytes_get(datum, val, size)
-      return true, ffi.string(val[0], size[0])
-   elseif datum_type == DOUBLE then
-      local val = ffi.new(double_ptr)
-      avro.avro_double_get(datum, val)
-      return true, val[0]
-   elseif datum_type == FLOAT then
-      local val = ffi.new(float_ptr)
-      avro.avro_float_get(datum, val)
-      return true, val[0]
-   elseif datum_type == INT then
-      local val = ffi.new(int32_t_ptr)
-      avro.avro_int32_get(datum, val)
-      return true, val[0]
-   elseif datum_type == LONG then
-      local val = ffi.new(int64_t_ptr)
-      avro.avro_int64_get(datum, val)
-      return true, val[0]
-   elseif datum_type == NULL then
+      if value.iface.get_bytes == nil then
+         return false, "No implementation for get_bytes"
+      end
+      local rc = value.iface.get_bytes(value.iface, value.self, v_const_void_p, v_size)
+      if rc ~= 0 then avro_error() end
+      return true, ffi.string(v_const_void_p[0], v_size[0])
+   elseif value_type == DOUBLE then
+      if value.iface.get_double == nil then
+         return false, "No implementation for get_double"
+      end
+      local rc = value.iface.get_double(value.iface, value.self, v_double)
+      if rc ~= 0 then avro_error() end
+      return true, v_double[0]
+   elseif value_type == FLOAT then
+      if value.iface.get_float == nil then
+         return false, "No implementation for get_float"
+      end
+      local rc = value.iface.get_float(value.iface, value.self, v_float)
+      if rc ~= 0 then avro_error() end
+      return true, v_float[0]
+   elseif value_type == INT then
+      if value.iface.get_int == nil then
+         return false, "No implementation for get_int"
+      end
+      local rc = value.iface.get_int(value.iface, value.self, v_int32)
+      if rc ~= 0 then avro_error() end
+      return true, v_int32[0]
+   elseif value_type == LONG then
+      if value.iface.get_long == nil then
+         return false, "No implementation for get_long"
+      end
+      local rc = value.iface.get_long(value.iface, value.self, v_int64)
+      if rc ~= 0 then avro_error() end
+      return true, v_int64[0]
+   elseif value_type == NULL then
+      if value.iface.get_null == nil then
+         return false, "No implementation for get_null"
+      end
+      local rc = value.iface.get_null(value.iface, value.self)
+      if rc ~= 0 then avro_error() end
       return true, nil
-   elseif datum_type == STRING then
-      local val = ffi.new(char_p_ptr)
-      avro.avro_string_get(datum, val)
-      return true, ffi.string(val[0])
-   elseif datum_type == ENUM then
-      return true, ffi.string(avro.avro_enum_get_name(datum))
-   elseif datum_type == FIXED then
-      local val = ffi.new(char_p_ptr)
+   elseif value_type == STRING then
       local size = ffi.new(int64_t_ptr)
-      avro.avro_fixed_get(datum, val, size)
-      return true, ffi.string(val[0], size[0])
+      if value.iface.get_string == nil then
+         return false, "No implementation for get_string"
+      end
+      local rc = value.iface.get_string(value.iface, value.self, v_const_char_p, v_size)
+      if rc ~= 0 then avro_error() end
+      -- size contains the NUL terminator
+      return true, ffi.string(v_const_char_p[0], v_size[0] - 1)
+   elseif value_type == ENUM then
+      if value.iface.get_enum == nil then
+         return false, "No implementation for get_enum"
+      end
+      local rc = value.iface.get_enum(value.iface, value.self, v_int)
+      if rc ~= 0 then avro_error() end
+      local schema = value.iface.get_schema(value.iface, value.self)
+      if schema == nil then avro_error() end
+      local symbol_name = avro.avro_schema_enum_get(schema, v_int[0])
+      if symbol_name == nil then avro_error() end
+      return true, ffi.string(symbol_name)
+   elseif value_type == FIXED then
+      local size = ffi.new(int64_t_ptr)
+      if value.iface.get_fixed == nil then
+         return false, "No implementation for get_fixed"
+      end
+      local rc = value.iface.get_fixed(value.iface, value.self, v_const_void_p, v_size)
+      if rc ~= 0 then avro_error() end
+      return true, ffi.string(v_const_void_p[0], v_size[0])
    else
-      return false
+      return false, "Not a scalar"
    end
 end
 
 -- A helper method that returns a LuaAvroValue wrapper for non-scalar
 -- values, and the Lua equivalent for scalar values.
-local function scalar_or_wrapper(datum)
-   local is_scalar, scalar = lua_scalar(datum)
+local function scalar_or_wrapper(value)
+   local is_scalar, scalar = lua_scalar(value)
    if is_scalar then
       return scalar
    else
-      return LuaAvroValue(datum)
+      return value
    end
 end
 
 -- A helper method that sets the content of a scalar value.  If the
 -- value isn't a scalar, we raise an error.
-local function set_scalar(datum, val)
-   local datum_type = datum[0].type
-   if datum_type == BOOLEAN then
-      avro.avro_boolean_set(datum, val)
+local function set_scalar(value, val)
+   local value_type = value:type()
+   if value_type == BOOLEAN then
+      if value.iface.set_boolean == nil then
+         error "No implementation for set_boolean"
+      end
+      local rc = value.iface.set_boolean(value.iface, value.self, val)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == BYTES then
-      avro.avro_bytes_set(datum, val, #val)
+   elseif value_type == BYTES then
+      if value.iface.set_bytes == nil then
+         error "No implementation for set_bytes"
+      end
+      local void_val = ffi.cast(void_p, val)
+      local rc = value.iface.set_bytes(value.iface, value.self, void_val, #val)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == DOUBLE then
-      avro.avro_double_set(datum, val)
+   elseif value_type == DOUBLE then
+      if value.iface.set_double == nil then
+         error "No implementation for set_double"
+      end
+      local rc = value.iface.set_double(value.iface, value.self, val)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == FLOAT then
-      avro.avro_float_set(datum, val)
+   elseif value_type == FLOAT then
+      if value.iface.set_float == nil then
+         error "No implementation for set_float"
+      end
+      local rc = value.iface.set_float(value.iface, value.self, val)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == INT then
-      avro.avro_int32_set(datum, val)
+   elseif value_type == INT then
+      if value.iface.set_int == nil then
+         error "No implementation for set_int"
+      end
+      local rc = value.iface.set_int(value.iface, value.self, val)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == LONG then
-      avro.avro_int64_set(datum, val)
+   elseif value_type == LONG then
+      if value.iface.set_long == nil then
+         error "No implementation for set_long"
+      end
+      local rc = value.iface.set_long(value.iface, value.self, val)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == NULL then
+   elseif value_type == NULL then
+      if value.iface.set_null == nil then
+         error "No implementation for set_null"
+      end
+      local rc = value.iface.set_null(value.iface, value.self)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == STRING then
-      avro.avro_string_set(datum, val)
+   elseif value_type == STRING then
+      if value.iface.set_string_len == nil then
+         error "No implementation for set_string_len"
+      end
+      -- length must include the NUL terminator
+      local char_val = ffi.cast(char_p, val)
+      local rc = value.iface.set_string_len(value.iface, value.self, char_val, #val+1)
+      if rc ~= 0 then avro_error() end
       return
-   elseif datum_type == ENUM then
-      return true, ffi.string(avro.avro_enum_set_name(datum))
-   elseif datum_type == FIXED then
-      avro.avro_fixed_set(datum, val, #val)
+   elseif value_type == ENUM then
+      if value.iface.set_enum == nil then
+         error "No implementation for set_enum"
+      end
+      local symbol_value
+      if type(val) == "number" then
+         symbol_value = val
+      else
+         local schema = value.iface.get_schema(value.iface, value.self)
+         if schema == nil then avro_error() end
+         symbol_value = avro.avro_schema_enum_get_by_name(schema, val)
+         if symbol_value < 0 then
+            error("No symbol named "..val)
+         end
+      end
+      local rc = value.iface.set_enum(value.iface, value.self, symbol_value)
+      if rc ~= 0 then avro_error() end
+      return
+   elseif value_type == FIXED then
+      if value.iface.set_fixed == nil then
+         error "No implementation for set_fixed"
+      end
+      local void_val = ffi.cast(void_p, val)
+      local rc = value.iface.set_fixed(value.iface, value.self, void_val, #val)
+      if rc ~= 0 then avro_error() end
       return
    else
       error("Avro value isn't a scalar")
@@ -465,139 +668,150 @@ local function set_scalar(datum, val)
 end
 
 function Value_class:append(element_val)
-   if self.datum[0].type ~= ARRAY then
+   if self:type() ~= ARRAY then
       error("Can only append to an array")
    end
 
-   local array_schema = avro.avro_datum_get_schema(self.datum)
-   local element_schema = avro.avro_schema_array_items(array_schema)
-   local element = avro.avro_datum_from_schema(element_schema)
-   local rc = avro.avro_array_append_datum(self.datum, element)
+   if self.iface.append == nil then
+      error "No implementation for append"
+   end
+
+   local element = LuaAvroValue()
+   local rc = self.iface.append(self.iface, self.self, element, nil)
    if rc ~= 0 then avro_error() end
 
    if element_val then
       set_scalar(element, element_val)
    end
 
-   return LuaAvroValue(element)
+   return element
 end
 
 function Value_class:discriminant()
-   if self.datum[0].type ~= UNION then
+   if self:type() ~= UNION then
       error("Can't get discriminant of a non-union value")
    end
 
-   local discriminant = avro.avro_union_discriminant(self.datum)
-   local union_schema = avro.avro_datum_get_schema(self.datum)
-   local branch = avro.avro_schema_union_branch(union_schema, discriminant)
+   if self.iface.get_discriminant == nil then
+      error "No implementation for get_discriminant"
+   end
+
+   local rc = self.iface.get_discriminant(self.iface, self.self, v_int)
+   if rc ~= 0 then avro_error() end
+
+   local union_schema = self.iface.get_schema(self.iface, self.self)
+   if union_schema == nil then avro_error() end
+
+   local branch = avro.avro_schema_union_branch(union_schema, v_int[0])
    return ffi.string(avro.avro_schema_type_name(branch))
 end
 
-local encoding_consumer = avro.avro_encoding_consumer_new()
-local sizeof_consumer = avro.avro_sizeof_consumer_new()
+--local encoding_consumer = avro.avro_encoding_consumer_new()
+--local sizeof_consumer = avro.avro_sizeof_consumer_new()
 
 local static_buf = ffi.new([[ char[65536] ]])
+local static_size = 65536
 
 function Value_class:encode()
-   local size = ffi.new(size_t_ptr)
-   avro.avro_consume_datum(self.datum, sizeof_consumer, size)
+   local size = self:encoded_size()
 
-   -- Use the static buffer if we, to save on some mallocs.
+   -- Use the static buffer if we can, to save on some mallocs.
    local buf, free_buf
-   if size[0] <= ffi.sizeof(static_buf) then
+   if size <= static_size then
       buf = static_buf
       free_buf = false
    else
-      buf = ffi.C.malloc(size[0])
+      buf = ffi.C.malloc(size)
       if buf == nil then return nil, "Out of memory" end
       free_buf = true
    end
 
-   local writer = avro.avro_writer_memory(buf, size[0])
-   local rc = avro.avro_consume_datum(self.datum, encoding_consumer, writer)
+   local writer = avro.avro_writer_memory(buf, size)
+   local rc = avro.avro_value_write(writer, self)
    avro.avro_writer_free(writer)
 
    if rc ~= 0 then
       if free_buf then ffi.C.free(buf) end
-      return nil, ffi.string(avro.avro_strerror())
+      return get_avro_error()
    else
-      local result = ffi.string(buf, size[0])
+      local result = ffi.string(buf, size)
       if free_buf then ffi.C.free(buf) end
       return result
    end
 end
 
 function Value_class:encoded_size()
-   local size = ffi.new(size_t_ptr)
-   avro.avro_consume_datum(self.datum, sizeof_consumer, size)
-   return size[0]
+   local rc = avro.avro_value_sizeof(self, v_size)
+   if rc ~= 0 then avro_error() end
+   return v_size[0]
 end
 
 function raw_encode_value(self, buf, size)
    local writer = avro.avro_writer_memory(buf, size)
-   local rc = avro.avro_consume_datum(self.datum, encoding_consumer, writer)
+   local rc = avro.avro_value_write(writer, self)
    avro.avro_writer_free(writer)
    if rc == 0 then
       return true
    else
-      return false, ffi.string(avro.avro_strerror())
+      return get_avro_error()
    end
 end
 
 function Value_class:get(index)
    if type(index) == "number" then
-      if self.datum[0].type == ARRAY then
-         local size = avro.avro_array_size(self.datum)
-         if index < 1 or index > size then
+      local value_type = self:type()
+      if value_type == ARRAY then
+         local rc = self.iface.get_size(self.iface, self.self, v_size)
+         if rc ~= 0 then return get_avro_error() end
+         if index < 1 or index > v_size[0] then
             return nil, "Index out of bounds"
          end
-         local element = ffi.new(avro_datum_t_ptr)
-         avro.avro_array_get(self.datum, index-1, element)
-         return scalar_or_wrapper(element[0])
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
+         if rc ~= 0 then avro_error() end
+         return scalar_or_wrapper(element)
       end
 
       return nil, "Can only get integer index from arrays"
 
    elseif type(index) == "string" then
-      local datum_type = self.datum[0].type
+      local value_type = self:type()
 
-      if datum_type == MAP then
-         local element = ffi.new(avro_datum_t_ptr)
-         avro.avro_map_get(self.datum, index, element)
-         if element[0] == nil then
-            return nil, "Map element doesn't exist"
-         end
-         return scalar_or_wrapper(element[0])
+      if value_type == MAP then
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         local rc = self.iface.get_by_name(self.iface, self.self, index, element, nil)
+         if rc ~= 0 then return get_avro_error() end
+         return scalar_or_wrapper(element)
 
-      elseif datum_type == RECORD then
-         local field = ffi.new(avro_datum_t_ptr)
-         avro.avro_record_get(self.datum, index, field)
-         if field[0] == nil then
-            return nil, "Record field doesn't exist"
-         end
-         return scalar_or_wrapper(field[0])
+      elseif value_type == RECORD then
+         local field = LuaAvroValue()
+         field.destructor = NO_DESTRUCTOR
+         local rc = self.iface.get_by_name(self.iface, self.self, index, field, nil)
+         if rc ~= 0 then return get_avro_error() end
+         return scalar_or_wrapper(field)
 
-      elseif datum_type == UNION then
+      elseif value_type == UNION then
          if index == "_" then
-            local branch = avro.avro_union_current_branch(self.datum)
+            local branch = LuaAvroValue()
+            branch.destructor = NO_DESTRUCTOR
+            local rc = self.iface.get_current_branch(self.iface, self.self, branch)
+            if rc ~= 0 then return get_avro_error() end
             return scalar_or_wrapper(branch)
          else
-            local union_schema = avro.avro_datum_get_schema(self.datum)
-            local discriminant = ffi.new(int_ptr)
+            local union_schema = self.iface.get_schema(self.iface, self.self)
             local branch_schema = avro.avro_schema_union_branch_by_name(
-               union_schema, discriminant, index
+               union_schema, v_int, index
             )
-            if branch_schema == nil then
-               return nil, ffi.string(avro.avro_strerror())
-            end
-            local branch = ffi.new(avro_datum_t_ptr)
-            local rc = avro.avro_union_set_discriminant(
-               self.datum, discriminant[0], branch
+            if branch_schema == nil then return get_avro_error() end
+            local branch = LuaAvroValue()
+            local rc = self.iface.set_branch(
+               self.iface, self.self,
+               v_int[0], branch
             )
-            if rc ~= 0 then
-               return nil, ffi.string(avro.avro_strerror())
-            end
-            return scalar_or_wrapper(branch[0])
+            if rc ~= 0 then return get_avro_error() end
+            return scalar_or_wrapper(branch)
          end
       end
 
@@ -612,11 +826,15 @@ local function iterate_array(state, unused)
    -- Have we reached the end?
    if state.next_index >= state.length then return nil end
    -- Nope.
-   local element = ffi.new(avro_datum_t_ptr)
-   avro.avro_array_get(state.datum, state.next_index, element)
+   local element = LuaAvroValue()
+   local rc = state.value.iface.get_by_index(
+      state.value.iface, state.value.self,
+      state.next_index, element, nil
+   )
+   if rc ~= 0 then avro_error() end
    state.next_index = state.next_index + 1
    -- Result should be a 1-based index for Lua
-   return state.next_index, scalar_or_wrapper(element[0])
+   return state.next_index, scalar_or_wrapper(element)
 end
 
 local function iterate_map(state, unused)
@@ -625,36 +843,43 @@ local function iterate_map(state, unused)
    if state.next_index >= state.length then return nil end
    -- Nope.
    local key = ffi.new(const_char_p_ptr)
-   local element = ffi.new(avro_datum_t_ptr)
-   avro.avro_map_get_key(state.datum, state.next_index, key)
-   avro.avro_map_get(state.datum, key[0], element)
+   local element = LuaAvroValue()
+   local rc = state.value.iface.get_by_index(
+      state.value.iface, state.value.self,
+      state.next_index, element, key
+   )
+   if rc ~= 0 then avro_error() end
    state.next_index = state.next_index + 1
-   return ffi.string(key[0]), scalar_or_wrapper(element[0])
+   return ffi.string(key[0]), scalar_or_wrapper(element)
 end
 
 function Value_class:iterate()
-   local datum_type = self.datum[0].type
+   local value_type = self:type()
 
-   if datum_type == ARRAY then
+   if value_type == ARRAY then
+      local rc = self.iface.get_size(self.iface, self.self, v_size)
+      if rc ~= 0 then avro_error() end
       local state = {
-         datum = self.datum,
+         value = self,
          next_index = 0,
-         length = avro.avro_array_size(self.datum),
+         length = v_size[0],
       }
       return iterate_array, state, nil
 
-   elseif datum_type == MAP then
+   elseif value_type == MAP then
+      local rc = self.iface.get_size(self.iface, self.self, v_size)
+      if rc ~= 0 then avro_error() end
       local state = {
-         datum = self.datum,
+         value = self,
          next_index = 0,
-         length = avro.avro_map_size(self.datum),
+         length = v_size[0],
       }
       return iterate_map, state, nil
    end
 end
 
 function Value_class:scalar()
-   local is_scalar, scalar = lua_scalar(self.datum)
+   local is_scalar, scalar = lua_scalar(self)
    if is_scalar then
       return scalar
    else
@@ -662,62 +887,61 @@ function Value_class:scalar()
    end
 end
 
-local function create_element(datum, index)
+local function create_element(value, index)
    if type(index) == "number" then
-      if datum[0].type == ARRAY then
-         local size = avro.avro_array_size(datum)
-         if index < 1 or index > size then
+      local value_type = value:type()
+      if value_type == ARRAY then
+         local rc = self.iface.get_size(self.iface, self.self, v_size)
+         if rc ~= 0 then return get_avro_error() end
+         if index < 1 or index > v_size[0] then
             return nil, "Index out of bounds"
          end
-         local element = ffi.new(avro_datum_t_ptr)
-         avro.avro_array_get(datum, index-1, element)
-         return element[0]
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
+         if rc ~= 0 then avro_error() end
+         return element
       end
 
       return nil, "Can only get integer index from arrays"
 
    elseif type(index) == "string" then
-      local datum_type = datum[0].type
+      local value_type = value:type()
 
-      if datum_type == MAP then
-         local element = ffi.new(avro_datum_t_ptr)
-         avro.avro_map_get(datum, index, element)
-         if element[0] == nil then
-            local map_schema = avro.avro_datum_get_schema(datum)
-            local element_schema = avro.avro_schema_map_values(map_schema)
-            element[0] = avro.avro_datum_from_schema(element_schema)
-            avro.avro_map_set(datum, index, element[0])
-         end
-         return element[0]
+      if value_type == MAP then
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         local rc = value.iface.add(value.iface, value.self, index, element, nil, nil)
+         if rc ~= 0 then return get_avro_error() end
+         return element
 
-      elseif datum_type == RECORD then
-         local field = ffi.new(avro_datum_t_ptr)
-         avro.avro_record_get(datum, index, field)
-         if field[0] == nil then
-            return nil, "Record field doesn't exist"
-         end
-         return field[0]
+      elseif value_type == RECORD then
+         local field = LuaAvroValue()
+         field.destructor = NO_DESTRUCTOR
+         local rc = value.iface.get_by_name(value.iface, value.self, index, field, nil)
+         if rc ~= 0 then return get_avro_error() end
+         return field
 
-      elseif datum_type == UNION then
+      elseif value_type == UNION then
          if index == "_" then
-            return avro.avro_union_current_branch(datum)
+            local branch = LuaAvroValue()
+            branch.destructor = NO_DESTRUCTOR
+            local rc = value.iface.get_current_branch(value.iface, value.self, branch)
+            if rc ~= 0 then return get_avro_error() end
+            return branch
          else
-            local union_schema = avro.avro_datum_get_schema(datum)
-            local discriminant = ffi.new(int_ptr)
+            local union_schema = value.iface.get_schema(value.iface, value.self)
             local branch_schema = avro.avro_schema_union_branch_by_name(
-               union_schema, discriminant, index
+               union_schema, v_int, index
             )
-            if branch_schema == nil then
-               return nil, ffi.string(avro.avro_strerror())
-            end
-            local branch = ffi.new(avro_datum_t_ptr)
-            local rc = avro.avro_union_set_discriminant(
-               datum, discriminant[0], branch
+            if branch_schema == nil then return get_avro_error() end
+            local branch = LuaAvroValue()
+            local rc = value.iface.set_branch(
+               value.iface, value.self,
+               v_int[0], branch
             )
-            if rc ~= 0 then
-               return nil, ffi.string(avro.avro_strerror())
-            end
-            return branch[0]
+            if rc ~= 0 then return get_avro_error() end
+            return branch
          end
       end
 
@@ -730,24 +954,39 @@ end
 function Value_class:set(arg1, arg2)
    if arg2 then
       local index, val = arg1, arg2
-      local element, err = create_element(self.datum, index)
+      local element, err = create_element(self, index)
       if not element then return element, err end
       set_scalar(element, val)
    else
-      set_scalar(self.datum, arg1)
+      set_scalar(self, arg1)
    end
 end
 
 function Value_class:type()
-   return self.datum[0].type
+   return self.iface.get_type(self.iface, self.self)
+end
+
+function Value_class:hash()
+   return avro.avro_value_hash(self)
+end
+
+function Value_class:set_source(src)
+   if self.destructor ~= RESOLVED_READER_DESTRUCTOR then
+      error "Can only call set_source on a resolved reader value"
+   end
+   avro.avro_resolved_reader_set_source(self, src)
+end
+
+function Value_class:copy_from(src)
+   local rc = avro.avro_value_copy(self, src)
+   if rc ~= 0 then avro_error() end
 end
 
 function Value_mt:__tostring()
-   local json = ffi.new(char_p_ptr)
-   local rc = avro.avro_datum_to_json(self.datum, true, json)
+   local rc = avro.avro_value_to_json(self, true, v_char_p)
    if rc ~= 0 then avro_error() end
-   local result = ffi.string(json[0])
-   ffi.C.free(json[0])
+   local result = ffi.string(v_char_p[0])
+   ffi.C.free(v_char_p[0])
    return result
 end
 
@@ -761,7 +1000,7 @@ function Value_mt:__index(idx)
    return Value_class.get(self, idx)
 end
 
-function Value_mt:__newindex(idx)
+function Value_mt:__newindex(idx, value)
    -- First try Value_class; if there's a function with the given name,
    -- then you need to use the set() method directly.  (We don't want
    -- the caller to overwrite any methods.)
@@ -769,54 +1008,102 @@ function Value_mt:__newindex(idx)
    if result then error("Cannot set field with [] syntax") end
 
    -- Otherwise defer to the set() method.
-   return Value_class.set(self, idx)
+   return Value_class.set(self, idx, value)
+end
+
+function Value_mt:__eq(other)
+   local eq = avro.avro_value_equal(self, other)
+   return eq ~= 0
 end
 
 function Value_mt:__gc()
-   if self.datum ~= nil then
-      avro.avro_datum_decref(self.datum)
-      self.datum = nil
+   if self.destructor == GENERIC_DESTRUCTOR and self.self ~= nil then
+      avro.avro_generic_value_free(self)
+   elseif self.destructor == RESOLVED_READER_DESTRUCTOR and self.self ~= nil then
+      avro.avro_resolved_reader_free_value(self)
    end
+   self.iface = nil
+   self.self = nil
+   self.destructor = NO_DESTRUCTOR
 end
 
-LuaAvroValue = ffi.metatype([[LuaAvroValue]], Value_mt)
+LuaAvroValue = ffi.metatype([[avro_value_t]], Value_mt)
 
 ------------------------------------------------------------------------
--- Resolvers
+-- ResolvedReaders
 
-local Resolver_class = {}
-local Resolver_mt = { __index = Resolver_class }
+local ResolvedReader_class = {}
+local ResolvedReader_mt = { __index = ResolvedReader_class }
 
-function raw_decode_value(resolver, buf, size, dest)
-   local reader = avro.avro_reader_memory(buf, size)
-   local void_datum = ffi.cast([[void *]], dest.datum)
-   local rc = avro.avro_consume_binary(reader, resolver.resolver, void_datum)
-   avro.avro_reader_free(reader)
-   if rc == 0 then
-      return true
-   else
-      return nil, ffi.string(avro.avro_strerror())
-   end
+function ResolvedReader_class:new_value()
+   local value = LuaAvroValue()
+   local rc = avro.avro_resolved_reader_new_value(self.resolver, value)
+   if rc ~= 0 then avro_error() end
+   value.destructor = RESOLVED_READER_DESTRUCTOR
+   return value
 end
 
-function Resolver_class:decode(buf, dest)
-   return raw_decode_value(self, buf, #buf, dest)
-end
-
-function Resolver_mt:__gc()
+function ResolvedReader_mt:__gc()
    if self.resolver ~= nil then
-      avro.avro_consumer_free(self.resolver)
+      self.resolver.decref(self.resolver)
       self.resolver = nil
    end
 end
 
-function Resolver(wschema, rschema)
-   local resolver = avro.avro_resolver_new(wschema.schema, rschema.schema)
-   if resolver == nil then return nil, ffi.string(avro.avro_strerror()) end
-   return LuaAvroResolver(resolver)
+function ResolvedReader(wschema, rschema)
+   local resolver = LuaAvroResolvedReader()
+   resolver.resolver = avro.avro_resolved_reader_new(wschema.schema, rschema.schema)
+   if resolver.resolver == nil then return get_avro_error() end
+   return resolver
 end
 
-LuaAvroResolver = ffi.metatype([[LuaAvroResolver]], Resolver_mt)
+LuaAvroResolvedReader = ffi.metatype([[LuaAvroResolvedReader]], ResolvedReader_mt)
+
+------------------------------------------------------------------------
+-- ResolvedWriters
+
+local ResolvedWriter_class = {}
+local ResolvedWriter_mt = { __index = ResolvedWriter_class }
+
+function raw_decode_value(resolver, buf, size, dest)
+   local reader = avro.avro_reader_memory(buf, size)
+   avro.avro_resolved_writer_set_dest(resolver.value, dest)
+   local rc = avro.avro_value_read(reader, resolver.value)
+   avro.avro_reader_free(reader)
+   if rc == 0 then
+      return true
+   else
+      return get_avro_error()
+   end
+end
+
+function ResolvedWriter_class:decode(buf, dest)
+   return raw_decode_value(self, buf, #buf, dest)
+end
+
+function ResolvedWriter_mt:__gc()
+   if self.resolver ~= nil then
+      self.resolver.decref(self.resolver)
+      self.resolver = nil
+   end
+
+   if self.value.self ~= nil then
+      avro.avro_resolved_writer_free_value(self.value)
+      self.value.iface = nil
+      self.value.self = nil
+   end
+end
+
+function ResolvedWriter(wschema, rschema)
+   local resolver = LuaAvroResolvedWriter()
+   resolver.resolver = avro.avro_resolved_writer_new(wschema.schema, rschema.schema)
+   if resolver.resolver == nil then return get_avro_error() end
+   local rc = avro.avro_resolved_writer_new_value(resolver.resolver, resolver.value)
+   if rc ~= 0 then return get_avro_error() end
+   return resolver
+end
+
+LuaAvroResolvedWriter = ffi.metatype([[LuaAvroResolvedWriter]], ResolvedWriter_mt)
 
 ------------------------------------------------------------------------
 -- Data files
@@ -824,15 +1111,24 @@ LuaAvroResolver = ffi.metatype([[LuaAvroResolver]], Resolver_mt)
 local DataInputFile_class = {}
 local DataInputFile_mt = { __index = DataInputFile_class }
 
+local function new_input_file(reader)
+   local l_reader = LuaAvroDataInputFile()
+   l_reader.reader = reader
+   l_reader.wschema = avro.avro_file_reader_get_writer_schema(reader)
+   l_reader.iface = avro.avro_generic_class_from_schema(l_reader.wschema)
+   return l_reader
+end
+
 function DataInputFile_class:read(value)
-   local datum = ffi.new(avro_datum_t_ptr)
-   local rc = avro.avro_file_reader_read(self.reader, nil, datum)
-   if rc ~= 0 then return get_avro_error() end
-   if value then
-      value.datum = datum[0]
-   else
-      value = LuaAvroValue(datum[0])
+   if not value then
+      value = LuaAvroValue()
+      local rc = avro.avro_generic_value_new(self.iface, value)
+      if rc ~= 0 then avro_error() end
+      value.destructor = GENERIC_DESTRUCTOR
    end
+
+   local rc = avro.avro_file_reader_read_value(self.reader, value)
+   if rc ~= 0 then return get_avro_error() end
    return value
 end
 
@@ -840,6 +1136,13 @@ function DataInputFile_class:close()
    if self.reader ~= nil then
       avro.avro_file_reader_close(self.reader)
       self.reader = nil
+   end
+   self.wschema = nil
+   if self.iface ~= nil then
+      if self.iface.decref ~= nil then
+         self.iface.decref(self.iface)
+      end
+      self.iface = nil
    end
 end
 
@@ -850,7 +1153,7 @@ local DataOutputFile_class = {}
 local DataOutputFile_mt = { __index = DataOutputFile_class }
 
 function DataOutputFile_class:write(value)
-   local rc = avro.avro_file_writer_append(self.writer, value.datum)
+   local rc = avro.avro_file_writer_append_value(self.writer, value)
    if rc ~= 0 then avro_error() end
 end
 
@@ -871,7 +1174,7 @@ function open(path, mode, schema)
       local reader = ffi.new(avro_file_reader_t_ptr)
       local rc = avro.avro_file_reader(path, reader)
       if rc ~= 0 then avro_error() end
-      return LuaAvroDataInputFile(reader[0])
+      return new_input_file(reader[0])
 
    elseif mode == "w" then
       local writer = ffi.new(avro_file_writer_t_ptr)
