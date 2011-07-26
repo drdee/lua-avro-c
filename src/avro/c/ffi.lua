@@ -370,6 +370,13 @@ avro_schema_t
 avro_schema_union_branch(avro_schema_t schema, int discriminant);
 ]]
 
+-- avro/value.h
+
+ffi.cdef [[
+int
+avro_value_to_json(const avro_value_t *value, int one_line, char **str);
+]]
+
 ------------------------------------------------------------------------
 -- Schemas
 
@@ -429,6 +436,7 @@ LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 local Value_class = {}
 local Value_mt = {}
 
+local v_char_p = ffi.new(char_p_ptr)
 local v_const_char_p = ffi.new(const_char_p_ptr)
 local v_double = ffi.new(double_ptr)
 local v_float = ffi.new(float_ptr)
@@ -929,15 +937,11 @@ function Value_class:type()
 end
 
 function Value_mt:__tostring()
-   --[[
-   local json = ffi.new(char_p_ptr)
-   local rc = avro.avro_datum_to_json(self.datum, true, json)
+   local rc = avro.avro_value_to_json(self, true, v_char_p)
    if rc ~= 0 then avro_error() end
-   local result = ffi.string(json[0])
-   ffi.C.free(json[0])
+   local result = ffi.string(v_char_p[0])
+   ffi.C.free(v_char_p[0])
    return result
-   ]]
-   return "NIY"
 end
 
 function Value_mt:__index(idx)

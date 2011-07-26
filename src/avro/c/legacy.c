@@ -129,11 +129,10 @@ l_value_discriminant(lua_State *L)
 static int
 l_value_tostring(lua_State *L)
 {
-    /*
-    LuaAvroValue  *l_value = luaL_checkudata(L, 1, MT_AVRO_VALUE);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
     char  *json_str = NULL;
 
-    if (avro_value_to_json(l_value->value, 1, &json_str))
+    if (avro_value_to_json(value, 1, &json_str))
     {
         lua_pushliteral(L, "Error retrieving JSON encoding for value");
         return lua_error(L);
@@ -141,9 +140,6 @@ l_value_tostring(lua_State *L)
 
     lua_pushstring(L, json_str);
     free(json_str);
-    return 1;
-    */
-    lua_pushliteral(L, "NIY");
     return 1;
 }
 
