@@ -111,6 +111,67 @@ do
 end
 
 ------------------------------------------------------------------------
+-- ResolvedReader()
+
+do
+   local function test_good_scalar(json1, json2, scalar)
+      local schema1 = A.Schema([[{"type": "]]..json1..[["}]])
+      local schema2 = A.Schema([[{"type": "]]..json2..[["}]])
+      local resolver = assert(A.ResolvedReader(schema1, schema2))
+
+      local value = schema1:new_value()
+      local resolved = resolver:new_value()
+      resolved:set_source(value)
+
+      value:set(scalar)
+      assert(resolved:scalar() == scalar)
+   end
+
+   test_good_scalar("int", "int", 42)
+   test_good_scalar("int", "long", 42)
+
+   local schema1 = A.Schema [[
+     {
+       "type": "record",
+       "name": "foo",
+       "fields": [
+         {"name": "a", "type": "int"},
+         {"name": "b", "type": "double"}
+       ]
+     }
+   ]]
+
+   local schema2 = A.Schema [[
+     {
+       "type": "record",
+       "name": "foo",
+       "fields": [
+         {"name": "a", "type": "int"}
+       ]
+     }
+   ]]
+
+   local resolver = assert(A.ResolvedReader(schema1, schema2))
+
+   local val1 = schema1:new_value()
+   val1.a = 1
+   val1.b = 42
+
+   local val2 = schema1:new_value()
+   val2.a = 1
+   val2.b = 100
+
+   local resolved1 = resolver:new_value()
+   resolved1:set_source(val1)
+
+   local resolved2 = resolver:new_value()
+   resolved2:set_source(val2)
+
+   assert(val1 ~= val2)
+   assert(resolved1 == resolved2)
+end
+
+------------------------------------------------------------------------
 -- ResolvedWriter()
 
 do

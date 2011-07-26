@@ -56,21 +56,25 @@ lua_avro_error(lua_State *L)
     } while (0)
 
 
+#define NO_DESTRUCTOR 0
+#define GENERIC_DESTRUCTOR 1
+#define RESOLVED_READER_DESTRUCTOR 2
+
 typedef struct _LuaAvroValue
 {
     avro_value_t  value;
-    bool  should_free;
+    int  destructor;
 } LuaAvroValue;
 
 
 int
-lua_avro_push_value(lua_State *L, avro_value_t *value, bool should_free)
+lua_avro_push_value(lua_State *L, avro_value_t *value, int destructor)
 {
     LuaAvroValue  *l_value;
 
     l_value = lua_newuserdata(L, sizeof(LuaAvroValue));
     l_value->value = *value;
-    l_value->should_free = should_free;
+    l_value->destructor = destructor;
     luaL_getmetatable(L, MT_AVRO_VALUE);
     lua_setmetatable(L, -2);
     return 1;
@@ -160,6 +164,26 @@ l_value_eq(lua_State *L)
 
 
 /**
+ * Sets the source of a resolved reader value.
+ */
+
+static int
+l_value_set_source(lua_State *L)
+{
+    LuaAvroValue  *l_value1 = luaL_checkudata(L, 1, MT_AVRO_VALUE);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+
+    if (l_value1->destructor != RESOLVED_READER_DESTRUCTOR) {
+        lua_pushliteral(L, "Can only call set_source on a resolved reader value");
+        return lua_error(L);
+    }
+
+    avro_resolved_reader_set_source(&l_value1->value, value2);
+    return 0;
+}
+
+
+/**
  * If @ref value is an Avro scalar, we push the Lua equivalent onto
  * the stack.  If the value is not a scalar, and @ref require_scalar
  * is true, we raise a Lua error.  Otherwise, we push a new AvroValue
@@ -168,7 +192,7 @@ l_value_eq(lua_State *L)
 
 static int
 lua_avro_push_scalar_or_value(lua_State *L, avro_value_t *value,
-                              bool require_scalar, bool should_free)
+                              bool require_scalar, int destructor)
 {
     switch (avro_value_get_type(value))
     {
@@ -263,7 +287,7 @@ lua_avro_push_scalar_or_value(lua_State *L, avro_value_t *value,
         }
 
         else {
-            lua_avro_push_value(L, value, should_free);
+            lua_avro_push_value(L, value, destructor);
             return 1;
         }
     }
@@ -293,7 +317,7 @@ static int
 l_value_scalar(lua_State *L)
 {
     avro_value_t  *value = lua_avro_get_value(L, 1);
-    return lua_avro_push_scalar_or_value(L, value, true, false);
+    return lua_avro_push_scalar_or_value(L, value, true, NO_DESTRUCTOR);
 }
 
 
@@ -322,11 +346,11 @@ get_array_element(lua_State *L, avro_value_t *value,
     check(avro_value_get_by_index(value, index-1, &element_value, NULL));
 
     if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &element_value, false, false);
+        return lua_avro_push_scalar_or_value(L, &element_value, false, NO_DESTRUCTOR);
     }
 
     else {
-        lua_avro_push_value(L, &element_value, false);
+        lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
         return 1;
     }
 }
@@ -356,11 +380,11 @@ get_map_value(lua_State *L, avro_value_t *value,
     }
 
     if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &element_value, false, false);
+        return lua_avro_push_scalar_or_value(L, &element_value, false, NO_DESTRUCTOR);
     }
 
     else {
-        lua_avro_push_value(L, &element_value, false);
+        lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
         return 1;
     }
 }
@@ -386,11 +410,11 @@ get_record_field(lua_State *L, avro_value_t *value,
     }
 
     if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &field_value, false, false);
+        return lua_avro_push_scalar_or_value(L, &field_value, false, NO_DESTRUCTOR);
     }
 
     else {
-        lua_avro_push_value(L, &field_value, false);
+        lua_avro_push_value(L, &field_value, NO_DESTRUCTOR);
         return 1;
     }
 }
@@ -431,11 +455,11 @@ get_union_branch(lua_State *L, avro_value_t *value,
     }
 
     if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &branch, false, false);
+        return lua_avro_push_scalar_or_value(L, &branch, false, NO_DESTRUCTOR);
     }
 
     else {
-        lua_avro_push_value(L, &branch, false);
+        lua_avro_push_value(L, &branch, NO_DESTRUCTOR);
         return 1;
     }
 }
@@ -759,7 +783,7 @@ l_value_append(lua_State *L)
 
     avro_value_t  element;
     check(avro_value_append(value, &element, NULL));
-    lua_avro_push_value(L, &element, false);
+    lua_avro_push_value(L, &element, NO_DESTRUCTOR);
 
     if (nargs == 2) {
         /*
@@ -834,7 +858,7 @@ iterate_array(lua_State *L)
     avro_value_t  element;
     check(avro_value_get_by_index(state->value, state->next_index, &element, NULL));
     lua_pushinteger(L, state->next_index+1);
-    lua_avro_push_scalar_or_value(L, &element, false, false);
+    lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
 
     state->next_index++;
     return 2;
@@ -860,7 +884,7 @@ iterate_map(lua_State *L)
     check(avro_value_get_by_index(state->value, state->next_index, &element, &key));
 
     lua_pushstring(L, key);
-    lua_avro_push_scalar_or_value(L, &element, false, false);
+    lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
 
     state->next_index++;
     return 2;
@@ -1001,12 +1025,17 @@ static int
 l_value_gc(lua_State *L)
 {
     LuaAvroValue  *l_value = luaL_checkudata(L, 1, MT_AVRO_VALUE);
-    if (l_value->should_free && l_value->value.self != NULL) {
+    if (l_value->destructor == GENERIC_DESTRUCTOR &&
+        l_value->value.self != NULL) {
         avro_generic_value_free(&l_value->value);
+    }
+    if (l_value->destructor == RESOLVED_READER_DESTRUCTOR &&
+        l_value->value.self != NULL) {
+        avro_resolved_reader_free_value(&l_value->value);
     }
     l_value->value.iface = NULL;
     l_value->value.self = NULL;
-    l_value->should_free = false;
+    l_value->destructor = false;
     return 0;
 }
 
@@ -1074,7 +1103,7 @@ l_schema_new_value(lua_State *L)
     LuaAvroSchema  *l_schema = luaL_checkudata(L, 1, MT_AVRO_SCHEMA);
     avro_value_t  value;
     check(avro_generic_value_new(l_schema->iface, &value));
-    lua_avro_push_value(L, &value, true);
+    lua_avro_push_value(L, &value, GENERIC_DESTRUCTOR);
     return 1;
 }
 
@@ -1157,6 +1186,97 @@ l_schema_new_array(lua_State *L)
 
 
 /*-----------------------------------------------------------------------
+ * Lua access — resolved readers
+ */
+
+/**
+ * The string used to identify the AvroResolvedReader class's metatable
+ * in the Lua registry.
+ */
+
+#define MT_AVRO_RESOLVED_READER "avro:AvroResolvedReader"
+
+typedef struct _LuaAvroResolvedReader
+{
+    avro_value_iface_t  *resolver;
+} LuaAvroResolvedReader;
+
+
+int
+lua_avro_push_resolved_reader(lua_State *L, avro_value_iface_t *resolver)
+{
+    LuaAvroResolvedReader  *l_resolver;
+
+    l_resolver = lua_newuserdata(L, sizeof(LuaAvroResolvedReader));
+    l_resolver->resolver = resolver;
+    luaL_getmetatable(L, MT_AVRO_RESOLVED_READER);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+
+avro_value_iface_t *
+lua_avro_get_resolved_reader(lua_State *L, int index)
+{
+    LuaAvroResolvedReader  *l_resolver =
+        luaL_checkudata(L, index, MT_AVRO_RESOLVED_READER);
+    return l_resolver->resolver;
+}
+
+
+/**
+ * Creates a new AvroResolvedReader for the given schemas.
+ */
+
+static int
+l_resolved_reader_new(lua_State *L)
+{
+    avro_schema_t  writer_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  reader_schema = lua_avro_get_schema(L, 2);
+    avro_value_iface_t  *resolver =
+        avro_resolved_reader_new(writer_schema, reader_schema);
+    if (resolver == NULL) {
+        return lua_return_avro_error(L);
+    } else {
+        lua_avro_push_resolved_reader(L, resolver);
+        return 1;
+    }
+}
+
+
+/**
+ * Finalizes an AvroResolvedReader instance.
+ */
+
+static int
+l_resolved_reader_gc(lua_State *L)
+{
+    LuaAvroResolvedReader  *l_resolver =
+        luaL_checkudata(L, 1, MT_AVRO_RESOLVED_READER);
+    if (l_resolver->resolver != NULL) {
+        avro_value_iface_decref(l_resolver->resolver);
+        l_resolver->resolver = NULL;
+    }
+    return 0;
+}
+
+
+/**
+ * Creates a new AvroValue for the given resolved reader.
+ */
+
+static int
+l_resolved_reader_new_value(lua_State *L)
+{
+    avro_value_iface_t  *resolver = lua_avro_get_resolved_reader(L, 1);
+    avro_value_t  value;
+    check(avro_resolved_reader_new_value(resolver, &value));
+    lua_avro_push_value(L, &value, RESOLVED_READER_DESTRUCTOR);
+    return 1;
+}
+
+
+/*-----------------------------------------------------------------------
  * Lua access — resolved writers
  */
 
@@ -1175,7 +1295,7 @@ typedef struct _LuaAvroResolvedWriter
 
 
 int
-lua_avro_push_resolver(lua_State *L, avro_value_iface_t *resolver)
+lua_avro_push_resolved_writer(lua_State *L, avro_value_iface_t *resolver)
 {
     LuaAvroResolvedWriter  *l_resolver;
 
@@ -1189,7 +1309,7 @@ lua_avro_push_resolver(lua_State *L, avro_value_iface_t *resolver)
 
 
 avro_value_iface_t *
-lua_avro_get_resolver(lua_State *L, int index)
+lua_avro_get_resolved_writer(lua_State *L, int index)
 {
     LuaAvroResolvedWriter  *l_resolver =
         luaL_checkudata(L, index, MT_AVRO_RESOLVED_WRITER);
@@ -1202,7 +1322,7 @@ lua_avro_get_resolver(lua_State *L, int index)
  */
 
 static int
-l_resolver_new(lua_State *L)
+l_resolved_writer_new(lua_State *L)
 {
     avro_schema_t  writer_schema = lua_avro_get_schema(L, 1);
     avro_schema_t  reader_schema = lua_avro_get_schema(L, 2);
@@ -1211,7 +1331,7 @@ l_resolver_new(lua_State *L)
     if (resolver == NULL) {
         return lua_return_avro_error(L);
     } else {
-        lua_avro_push_resolver(L, resolver);
+        lua_avro_push_resolved_writer(L, resolver);
         return 1;
     }
 }
@@ -1222,7 +1342,7 @@ l_resolver_new(lua_State *L)
  */
 
 static int
-l_resolver_gc(lua_State *L)
+l_resolved_writer_gc(lua_State *L)
 {
     LuaAvroResolvedWriter  *l_resolver =
         luaL_checkudata(L, 1, MT_AVRO_RESOLVED_WRITER);
@@ -1244,7 +1364,7 @@ l_resolver_gc(lua_State *L)
  */
 
 static int
-l_resolver_decode(lua_State *L)
+l_resolved_writer_decode(lua_State *L)
 {
     LuaAvroResolvedWriter  *l_resolver =
         luaL_checkudata(L, 1, MT_AVRO_RESOLVED_WRITER);
@@ -1383,7 +1503,7 @@ l_input_file_read(lua_State *L)
         if (rc != 0) {
             return lua_return_avro_error(L);
         }
-        lua_avro_push_value(L, &value, true);
+        lua_avro_push_value(L, &value, GENERIC_DESTRUCTOR);
         return 1;
     }
 
@@ -1520,6 +1640,7 @@ static const luaL_Reg  value_methods[] =
     {"iterate", l_value_iterate},
     {"scalar", l_value_scalar},
     {"set", l_value_set},
+    {"set_source", l_value_set_source},
     {"type", l_value_type},
     {NULL, NULL}
 };
@@ -1533,9 +1654,16 @@ static const luaL_Reg  schema_methods[] =
 };
 
 
-static const luaL_Reg  resolver_methods[] =
+static const luaL_Reg  resolved_reader_methods[] =
 {
-    {"decode", l_resolver_decode},
+    {"new_value", l_resolved_reader_new_value},
+    {NULL, NULL}
+};
+
+
+static const luaL_Reg  resolved_writer_methods[] =
+{
+    {"decode", l_resolved_writer_decode},
     {NULL, NULL}
 };
 
@@ -1559,7 +1687,8 @@ static const luaL_Reg  output_file_methods[] =
 static const luaL_Reg  mod_methods[] =
 {
     {"ArraySchema", l_schema_new_array},
-    {"ResolvedWriter", l_resolver_new},
+    {"ResolvedReader", l_resolved_reader_new},
+    {"ResolvedWriter", l_resolved_writer_new},
     {"Schema", l_schema_new},
     {"Value", l_value_new},
     {"open", l_file_open},
@@ -1615,13 +1744,23 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
+    /* AvroResolvedReader metatable */
+
+    luaL_newmetatable(L, MT_AVRO_RESOLVED_READER);
+    lua_createtable(L, 0, sizeof(resolved_reader_methods) / sizeof(luaL_reg) - 1);
+    luaL_register(L, NULL, resolved_reader_methods);
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_resolved_reader_gc);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
     /* AvroResolvedWriter metatable */
 
     luaL_newmetatable(L, MT_AVRO_RESOLVED_WRITER);
-    lua_createtable(L, 0, sizeof(resolver_methods) / sizeof(luaL_reg) - 1);
-    luaL_register(L, NULL, resolver_methods);
+    lua_createtable(L, 0, sizeof(resolved_writer_methods) / sizeof(luaL_reg) - 1);
+    luaL_register(L, NULL, resolved_writer_methods);
     lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, l_resolver_gc);
+    lua_pushcfunction(L, l_resolved_writer_gc);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 

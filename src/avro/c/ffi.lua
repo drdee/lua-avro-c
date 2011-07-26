@@ -60,7 +60,7 @@ end
 --
 -- typedef struct LuaAvroValue {
 --     avro_value_t  value;
---     bool  should_free;
+--     int  destructor;
 -- } LuaAvroValue;
 --
 -- Unfortunately, the LuaJIT compiler doesn't currently support
@@ -72,13 +72,17 @@ end
 -- own definition of avro_value_t.  The beginning of the struct still
 -- matches what the library expects, so we should be okay.
 
+local NO_DESTRUCTOR = 0
+local GENERIC_DESTRUCTOR = 1
+local RESOLVED_READER_DESTRUCTOR = 2
+
 ffi.cdef [[
 typedef struct avro_value_iface  avro_value_iface_t;
 
 typedef struct avro_value {
 	const avro_value_iface_t  *iface;
 	void  *self;
-        bool  should_free;
+        int  destructor;
 } avro_value_t;
 
 typedef avro_obj_t  *avro_schema_t;
@@ -175,6 +179,10 @@ typedef struct LuaAvroSchema {
     avro_schema_t  schema;
     avro_value_iface_t  *iface;
 } LuaAvroSchema;
+
+typedef struct LuaAvroResolvedReader {
+    avro_value_iface_t  *resolver;
+} LuaAvroResolvedReader;
 
 typedef struct LuaAvroResolvedWriter {
     avro_value_iface_t  *resolver;
@@ -325,6 +333,19 @@ avro_writer_free(avro_writer_t writer);
 
 ffi.cdef [[
 avro_value_iface_t *
+avro_resolved_reader_new(avro_schema_t wschema, avro_schema_t rschema);
+
+int
+avro_resolved_reader_new_value(const avro_value_iface_t *iface,
+                               avro_value_t *value);
+
+void
+avro_resolved_reader_free_value(avro_value_t *self);
+
+void
+avro_resolved_reader_set_source(avro_value_t *self, avro_value_t *src);
+
+avro_value_iface_t *
 avro_resolved_writer_new(avro_schema_t wschema, avro_schema_t rschema);
 
 int
@@ -393,7 +414,7 @@ function Schema_class:new_value()
    local value = LuaAvroValue()
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
-   value.should_free = true
+   value.destructor = GENERIC_DESTRUCTOR
    return value
 end
 
@@ -743,7 +764,7 @@ function Value_class:get(index)
             return nil, "Index out of bounds"
          end
          local element = LuaAvroValue()
-         element.should_free = false
+         element.destructor = NO_DESTRUCTOR
          rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
          if rc ~= 0 then avro_error() end
          return scalar_or_wrapper(element)
@@ -756,14 +777,14 @@ function Value_class:get(index)
 
       if value_type == MAP then
          local element = LuaAvroValue()
-         element.should_free = false
+         element.destructor = NO_DESTRUCTOR
          local rc = self.iface.get_by_name(self.iface, self.self, index, element, nil)
          if rc ~= 0 then return get_avro_error() end
          return scalar_or_wrapper(element)
 
       elseif value_type == RECORD then
          local field = LuaAvroValue()
-         field.should_free = false
+         field.destructor = NO_DESTRUCTOR
          local rc = self.iface.get_by_name(self.iface, self.self, index, field, nil)
          if rc ~= 0 then return get_avro_error() end
          return scalar_or_wrapper(field)
@@ -771,7 +792,7 @@ function Value_class:get(index)
       elseif value_type == UNION then
          if index == "_" then
             local branch = LuaAvroValue()
-            branch.should_free = false
+            branch.destructor = NO_DESTRUCTOR
             local rc = self.iface.get_current_branch(self.iface, self.self, branch)
             if rc ~= 0 then return get_avro_error() end
             return scalar_or_wrapper(branch)
@@ -873,7 +894,7 @@ local function create_element(value, index)
             return nil, "Index out of bounds"
          end
          local element = LuaAvroValue()
-         element.should_free = false
+         element.destructor = NO_DESTRUCTOR
          rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
          if rc ~= 0 then avro_error() end
          return element
@@ -886,14 +907,14 @@ local function create_element(value, index)
 
       if value_type == MAP then
          local element = LuaAvroValue()
-         element.should_free = false
+         element.destructor = NO_DESTRUCTOR
          local rc = value.iface.add(value.iface, value.self, index, element, nil, nil)
          if rc ~= 0 then return get_avro_error() end
          return element
 
       elseif value_type == RECORD then
          local field = LuaAvroValue()
-         field.should_free = false
+         field.destructor = NO_DESTRUCTOR
          local rc = value.iface.get_by_name(value.iface, value.self, index, field, nil)
          if rc ~= 0 then return get_avro_error() end
          return field
@@ -901,7 +922,7 @@ local function create_element(value, index)
       elseif value_type == UNION then
          if index == "_" then
             local branch = LuaAvroValue()
-            branch.should_free = false
+            branch.destructor = NO_DESTRUCTOR
             local rc = value.iface.get_current_branch(value.iface, value.self, branch)
             if rc ~= 0 then return get_avro_error() end
             return branch
@@ -946,6 +967,13 @@ function Value_class:hash()
    return avro.avro_value_hash(self)
 end
 
+function Value_class:set_source(src)
+   if self.destructor ~= RESOLVED_READER_DESTRUCTOR then
+      error "Can only call set_source on a resolved reader value"
+   end
+   avro.avro_resolved_reader_set_source(self, src)
+end
+
 function Value_mt:__tostring()
    local rc = avro.avro_value_to_json(self, true, v_char_p)
    if rc ~= 0 then avro_error() end
@@ -964,7 +992,7 @@ function Value_mt:__index(idx)
    return Value_class.get(self, idx)
 end
 
-function Value_mt:__newindex(idx)
+function Value_mt:__newindex(idx, value)
    -- First try Value_class; if there's a function with the given name,
    -- then you need to use the set() method directly.  (We don't want
    -- the caller to overwrite any methods.)
@@ -972,7 +1000,7 @@ function Value_mt:__newindex(idx)
    if result then error("Cannot set field with [] syntax") end
 
    -- Otherwise defer to the set() method.
-   return Value_class.set(self, idx)
+   return Value_class.set(self, idx, value)
 end
 
 function Value_mt:__eq(other)
@@ -981,15 +1009,47 @@ function Value_mt:__eq(other)
 end
 
 function Value_mt:__gc()
-   if self.should_free and self.self ~= nil then
+   if self.destructor == GENERIC_DESTRUCTOR and self.self ~= nil then
       avro.avro_generic_value_free(self)
-      self.iface = nil
-      self.self = nil
-      self.should_free = false
+   elseif self.destructor == RESOLVED_READER_DESTRUCTOR and self.self ~= nil then
+      avro.avro_resolved_reader_free_value(self)
    end
+   self.iface = nil
+   self.self = nil
+   self.destructor = NO_DESTRUCTOR
 end
 
 LuaAvroValue = ffi.metatype([[avro_value_t]], Value_mt)
+
+------------------------------------------------------------------------
+-- ResolvedReaders
+
+local ResolvedReader_class = {}
+local ResolvedReader_mt = { __index = ResolvedReader_class }
+
+function ResolvedReader_class:new_value()
+   local value = LuaAvroValue()
+   local rc = avro.avro_resolved_reader_new_value(self.resolver, value)
+   if rc ~= 0 then avro_error() end
+   value.destructor = RESOLVED_READER_DESTRUCTOR
+   return value
+end
+
+function ResolvedReader_mt:__gc()
+   if self.resolver ~= nil then
+      self.resolver.decref(self.resolver)
+      self.resolver = nil
+   end
+end
+
+function ResolvedReader(wschema, rschema)
+   local resolver = LuaAvroResolvedReader()
+   resolver.resolver = avro.avro_resolved_reader_new(wschema.schema, rschema.schema)
+   if resolver.resolver == nil then return get_avro_error() end
+   return resolver
+end
+
+LuaAvroResolvedReader = ffi.metatype([[LuaAvroResolvedReader]], ResolvedReader_mt)
 
 ------------------------------------------------------------------------
 -- ResolvedWriters
@@ -1056,7 +1116,7 @@ function DataInputFile_class:read(value)
       value = LuaAvroValue()
       local rc = avro.avro_generic_value_new(self.iface, value)
       if rc ~= 0 then avro_error() end
-      value.should_free = true
+      value.destructor = GENERIC_DESTRUCTOR
    end
 
    local rc = avro.avro_file_reader_read_value(self.reader, value)
