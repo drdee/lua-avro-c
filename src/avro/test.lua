@@ -67,11 +67,11 @@ do
       local items_schema = A.Schema([[{"type": "]]..prim_type..[["}]])
       local schema = A.ArraySchema(items_schema)
       local array = schema:new_value()
-      local array2 = schema:new_value()
       for _,val in ipairs(expected) do
          array:append(val)
-         array2:append(val)
       end
+      local array2 = schema:new_value()
+      array2:copy_from(array)
       local actual = {}
       for _,element in array:iterate() do
          table.insert(actual, element)
@@ -92,11 +92,11 @@ do
    local function test_map(prim_type, expected)
       local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
       local map = schema:new_value()
-      local map2 = schema:new_value()
       for key,val in pairs(expected) do
          map:set(key, val)
-         map2:set(key, val)
       end
+      local map2 = schema:new_value()
+      map2:copy_from(map)
       local actual = {}
       for key,element in map:iterate() do
          actual[key] = element

@@ -164,6 +164,20 @@ l_value_eq(lua_State *L)
 
 
 /**
+ * Copies the contents of one value into another.
+ */
+
+static int
+l_value_copy_from(lua_State *L)
+{
+    avro_value_t  *dest = lua_avro_get_value(L, 1);
+    avro_value_t  *src = lua_avro_get_value(L, 2);
+    lua_pushboolean(L, avro_value_copy(dest, src));
+    return 1;
+}
+
+
+/**
  * Sets the source of a resolved reader value.
  */
 
@@ -1632,6 +1646,7 @@ l_file_open(lua_State *L)
 static const luaL_Reg  value_methods[] =
 {
     {"append", l_value_append},
+    {"copy_from", l_value_copy_from},
     {"discriminant", l_value_discriminant},
     {"encode", l_value_encode},
     {"encoded_size", l_value_encoded_size},

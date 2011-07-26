@@ -395,6 +395,9 @@ avro_schema_union_branch(avro_schema_t schema, int discriminant);
 
 ffi.cdef [[
 int
+avro_value_copy(avro_value_t *dest, avro_value_t *src);
+
+int
 avro_value_equal(avro_value_t *val1, avro_value_t *val2);
 
 uint32_t
@@ -972,6 +975,11 @@ function Value_class:set_source(src)
       error "Can only call set_source on a resolved reader value"
    end
    avro.avro_resolved_reader_set_source(self, src)
+end
+
+function Value_class:copy_from(src)
+   local rc = avro.avro_value_copy(self, src)
+   if rc ~= 0 then avro_error() end
 end
 
 function Value_mt:__tostring()
