@@ -311,6 +311,9 @@ avro_reader_t
 avro_reader_memory(const char *buf, int64_t len);
 
 void
+avro_reader_memory_set_source(avro_reader_t r, const char *buf, int64_t len);
+
+void
 avro_reader_free(avro_reader_t reader);
 
 int
@@ -324,6 +327,9 @@ avro_value_sizeof(avro_value_t *src, size_t *size);
 
 avro_writer_t
 avro_writer_memory(char *buf, int64_t len);
+
+void
+avro_writer_memory_set_dest(avro_writer_t r, const char *buf, int64_t len);
 
 void
 avro_writer_free(avro_writer_t writer);
@@ -706,11 +712,9 @@ function Value_class:discriminant()
    return ffi.string(avro.avro_schema_type_name(branch))
 end
 
---local encoding_consumer = avro.avro_encoding_consumer_new()
---local sizeof_consumer = avro.avro_sizeof_consumer_new()
-
 local static_buf = ffi.new([[ char[65536] ]])
 local static_size = 65536
+local memory_writer = avro.avro_writer_memory(nil, 0)
 
 function Value_class:encode()
    local size = self:encoded_size()
@@ -726,9 +730,8 @@ function Value_class:encode()
       free_buf = true
    end
 
-   local writer = avro.avro_writer_memory(buf, size)
-   local rc = avro.avro_value_write(writer, self)
-   avro.avro_writer_free(writer)
+   avro.avro_writer_memory_set_dest(memory_writer, buf, size)
+   local rc = avro.avro_value_write(memory_writer, self)
 
    if rc ~= 0 then
       if free_buf then ffi.C.free(buf) end
@@ -1065,11 +1068,12 @@ LuaAvroResolvedReader = ffi.metatype([[LuaAvroResolvedReader]], ResolvedReader_m
 local ResolvedWriter_class = {}
 local ResolvedWriter_mt = { __index = ResolvedWriter_class }
 
+local memory_reader = avro.avro_reader_memory(nil, 0)
+
 function raw_decode_value(resolver, buf, size, dest)
-   local reader = avro.avro_reader_memory(buf, size)
+   avro.avro_reader_memory_set_source(memory_reader, buf, size)
    avro.avro_resolved_writer_set_dest(resolver.value, dest)
-   local rc = avro.avro_value_read(reader, resolver.value)
-   avro.avro_reader_free(reader)
+   local rc = avro.avro_value_read(memory_reader, resolver.value)
    if rc == 0 then
       return true
    else
