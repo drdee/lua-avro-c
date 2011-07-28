@@ -29,7 +29,6 @@
  */
 
 #define MT_AVRO_VALUE "avro:AvroValue"
-#define MT_AVRO_VALUE_METHODS "avro:AvroValue:methods"
 
 static int
 lua_return_avro_error(lua_State *L)
@@ -86,6 +85,30 @@ lua_avro_get_value(lua_State *L, int index)
 {
     LuaAvroValue  *l_value = luaL_checkudata(L, index, MT_AVRO_VALUE);
     return &l_value->value;
+}
+
+
+avro_value_t *
+lua_avro_get_raw_value(lua_State *L, int index)
+{
+    avro_value_t  *result;
+    lua_pushvalue(L, index);
+    lua_pushliteral(L, "raw_value");
+    lua_gettable(L, -2);
+    lua_replace(L, -2);
+    lua_pushvalue(L, index);
+    lua_call(L, 1, 1);
+    result = lua_avro_get_value(L, -1);
+    lua_pop(L, 1);
+    return result;
+}
+
+
+static int
+l_value_raw_value(lua_State *L)
+{
+    luaL_checkudata(L, 1, MT_AVRO_VALUE);
+    return 1;
 }
 
 
@@ -211,16 +234,56 @@ l_value_reset(lua_State *L)
 
 
 /**
- * If @ref value is an Avro scalar, we push the Lua equivalent onto
- * the stack.  If the value is not a scalar, and @ref require_scalar
- * is true, we raise a Lua error.  Otherwise, we push a new AvroValue
- * wrapper onto the stack.
+ * Select the union branch with the given name, and push a Value wrapper
+ * for the branch onto the Lua stack.
  */
 
 static int
-lua_avro_push_scalar_or_value(lua_State *L, avro_value_t *value,
-                              bool require_scalar, int destructor)
+select_union_branch(lua_State *L, avro_value_t *value, int branch_index)
 {
+    int  discriminant;
+
+    if (lua_isnumber(L, branch_index)) {
+        discriminant = lua_tointeger(L, branch_index);
+    }
+
+    else if (lua_isstring(L, branch_index)) {
+        const char  *branch_name = lua_tostring(L, branch_index);
+        avro_schema_t  union_schema = avro_value_get_schema(value);
+        avro_schema_t  branch_schema =
+            avro_schema_union_branch_by_name
+            (union_schema, &discriminant, branch_name);
+
+        if (branch_schema == NULL) {
+            lua_pushfstring(L, "No %s branch in union", branch_name);
+            return lua_error(L);
+        }
+    }
+
+    else {
+        lua_pushliteral(L, "Can only set string or integer index in union");
+        return lua_error(L);
+    }
+
+    avro_value_t  branch;
+    check(avro_value_set_branch(value, discriminant, &branch));
+    lua_avro_push_value(L, &branch, NO_DESTRUCTOR);
+    return 1;
+}
+
+/**
+ * Extract the contents of an Avro value.  For scalars, we push the
+ * equivalent Lua value onto the stack.  For arrays and maps, we
+ * retrieve the element the given index.  For records, we retrieve the
+ * field with the given name or index.  For unions, we return the
+ * current branch.
+ */
+
+static int
+l_value_get(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+
     switch (avro_value_get_type(value))
     {
       case AVRO_STRING:
@@ -308,15 +371,127 @@ lua_avro_push_scalar_or_value(lua_State *L, avro_value_t *value,
             return 1;
         }
 
-      default:
-        if (require_scalar) {
-            return luaL_error(L, "Avro value isn't a scalar");
-        }
+      case AVRO_ARRAY:
+        {
+            lua_Integer  index = luaL_checkinteger(L, 2);
+            size_t  array_size;
+            check(avro_value_get_size(value, &array_size));
 
-        else {
-            lua_avro_push_value(L, value, destructor);
+            if ((index < 1) || (index > array_size)) {
+                lua_pushnil(L);
+                lua_pushliteral(L, "Index out of bounds");
+                return 2;
+            }
+
+            avro_value_t  element_value;
+            check(avro_value_get_by_index(value, index-1, &element_value, NULL));
+            lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
             return 1;
         }
+
+      case AVRO_MAP:
+        {
+            if (lua_gettop(L) < 2) {
+                lua_pushliteral(L, "Missing index on MapValue:get()");
+                return lua_error(L);
+            }
+
+
+            if (lua_isnumber(L, 2)) {
+                lua_Integer  index = lua_tointeger(L, 2);
+                avro_value_t  element_value = { NULL, NULL };
+                const char  *key;
+                check(avro_value_get_by_index(value, index, &element_value, &key));
+
+                if (element_value.self == NULL) {
+                    lua_pushnil(L);
+                    lua_pushliteral(L, "Map element doesn't exist");
+                    return 2;
+                } else {
+                    lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
+                    lua_pushstring(L, key);
+                    return 2;
+                }
+            }
+
+            if (lua_isstring(L, 2)) {
+                const char  *key = lua_tostring(L, 2);
+                avro_value_t  element_value = { NULL, NULL };
+                size_t  index;
+                check(avro_value_get_by_name(value, key, &element_value, &index));
+
+                if (element_value.self == NULL) {
+                    lua_pushnil(L);
+                    lua_pushliteral(L, "Map element doesn't exist");
+                    return 2;
+                } else {
+                    lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
+                    lua_pushinteger(L, index);
+                    return 2;
+                }
+            }
+
+            lua_pushliteral(L, "Can only get string or integer index from map");
+            return lua_error(L);
+        }
+
+      case AVRO_RECORD:
+        {
+            if (lua_gettop(L) < 2) {
+                lua_pushliteral(L, "Missing index on RecordValue:get()");
+                return lua_error(L);
+            }
+
+            if (lua_isnumber(L, 2)) {
+                lua_Integer  index = lua_tointeger(L, 2);
+                avro_value_t  field_value = { NULL, NULL };
+                check(avro_value_get_by_index(value, index, &field_value, NULL));
+
+                if (field_value.self == NULL) {
+                    lua_pushnil(L);
+                    lua_pushliteral(L, "Record field doesn't exist");
+                    return 2;
+                } else {
+                    lua_avro_push_value(L, &field_value, NO_DESTRUCTOR);
+                    return 1;
+                }
+            }
+
+            if (lua_isstring(L, 2)) {
+                const char  *key = lua_tostring(L, 2);
+                avro_value_t  field_value = { NULL, NULL };
+                check(avro_value_get_by_name(value, key, &field_value, NULL));
+
+                if (field_value.self == NULL) {
+                    lua_pushnil(L);
+                    lua_pushliteral(L, "Record field doesn't exist");
+                    return 2;
+                } else {
+                    lua_avro_push_value(L, &field_value, NO_DESTRUCTOR);
+                    return 1;
+                }
+            }
+
+            lua_pushliteral(L, "Can only get string or integer index from record");
+            return lua_error(L);
+        }
+
+      case AVRO_UNION:
+        {
+            if (lua_gettop(L) < 2 || lua_isnil(L, 2)) {
+                avro_value_t  branch;
+                check(avro_value_get_current_branch(value, &branch));
+                lua_avro_push_value(L, &branch, NO_DESTRUCTOR);
+                return 1;
+            } else {
+                select_union_branch(L, value, 2);
+                return 1;
+            }
+        }
+
+      default:
+        return luaL_error(L, "Don't know how to get from value type %d",
+                          avro_value_get_type(value));
     }
 }
 
@@ -336,451 +511,119 @@ l_value_hash(lua_State *L)
 
 
 /**
- * Returns the value of a scalar AvroValue instance.  If the value
- * isn't a scalar, we raise an error.
- */
-
-static int
-l_value_scalar(lua_State *L)
-{
-    avro_value_t  *value = lua_avro_get_value(L, 1);
-    return lua_avro_push_scalar_or_value(L, value, true, NO_DESTRUCTOR);
-}
-
-
-/**
- * Extract the given element from an Avro array value, and push it onto
- * the stack.  If the value is a scalar, push the Lua equivalent of the
- * scalar value onto the stack, rather than a new AvroValue wrapper.
- *
- * We follow the Lua convention that @ref index is 1-based.
- */
-
-static int
-get_array_element(lua_State *L, avro_value_t *value,
-                  unsigned int index, bool coerce_scalar)
-{
-    size_t  array_size;
-    check(avro_value_get_size(value, &array_size));
-
-    if ((index < 1) || (index > array_size)) {
-        lua_pushnil(L);
-        lua_pushliteral(L, "Index out of bounds");
-        return 2;
-    }
-
-    avro_value_t  element_value;
-    check(avro_value_get_by_index(value, index-1, &element_value, NULL));
-
-    if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &element_value, false, NO_DESTRUCTOR);
-    }
-
-    else {
-        lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
-        return 1;
-    }
-}
-
-
-/**
- * Extract the named value from an Avro map value, and push it onto the
- * stack.  If the value is a scalar, push the Lua equivalent of the
- * scalar value onto the stack, rather than a new AvroValue wrapper.
- */
-
-static int
-get_map_value(lua_State *L, avro_value_t *value,
-              const char *key, bool can_create, bool coerce_scalar)
-{
-    avro_value_t  element_value;
-
-    if (can_create) {
-        check(avro_value_add(value, key, &element_value, NULL, NULL));
-    } else {
-        check(avro_value_get_by_name(value, key, &element_value, NULL));
-        if (element_value.self == NULL) {
-            lua_pushnil(L);
-            lua_pushliteral(L, "Map element doesn't exist");
-            return 2;
-        }
-    }
-
-    if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &element_value, false, NO_DESTRUCTOR);
-    }
-
-    else {
-        lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
-        return 1;
-    }
-}
-
-
-/**
- * Extract the named field from an Avro record value, and push it onto
- * the stack.  If the field is a scalar, push the Lua equivalent of the
- * scalar value onto the stack, rather than a new AvroValue wrapper.
- */
-
-static int
-get_record_field(lua_State *L, avro_value_t *value,
-                 const char *field_name, bool coerce_scalar)
-{
-    avro_value_t  field_value;
-    check(avro_value_get_by_name(value, field_name, &field_value, NULL));
-
-    if (field_value.self == NULL) {
-        lua_pushnil(L);
-        lua_pushliteral(L, "Record field doesn't exist");
-        return 2;
-    }
-
-    if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &field_value, false, NO_DESTRUCTOR);
-    }
-
-    else {
-        lua_avro_push_value(L, &field_value, NO_DESTRUCTOR);
-        return 1;
-    }
-}
-
-
-/**
- * Extract the branch value from an Avro union value, and push it onto
- * the stack.  If the field is a scalar, push the Lua equivalent of the
- * scalar value onto the stack, rather than a new AvroValue wrapper.
- *
- * If the “field_name” for a union branch is “_”, then we return the
- * current branch.  Otherwise the “field_name” must match the name of
- * one of the schemas of the union.
- */
-
-static int
-get_union_branch(lua_State *L, avro_value_t *value,
-                 const char *field_name, bool coerce_scalar)
-{
-    avro_value_t  branch;
-
-    if (field_name[0] == '_' && field_name[1] == '\0') {
-        check(avro_value_get_current_branch(value, &branch));
-    }
-
-    else {
-        int  discriminant;
-        avro_schema_t  union_schema = avro_value_get_schema(value);
-        avro_schema_t  branch_schema =
-            avro_schema_union_branch_by_name
-            (union_schema, &discriminant, field_name);
-
-        if (branch_schema == NULL) {
-            return lua_return_avro_error(L);
-        }
-
-        check(avro_value_set_branch(value, discriminant, &branch));
-    }
-
-    if (coerce_scalar) {
-        return lua_avro_push_scalar_or_value(L, &branch, false, NO_DESTRUCTOR);
-    }
-
-    else {
-        lua_avro_push_value(L, &branch, NO_DESTRUCTOR);
-        return 1;
-    }
-}
-
-
-/**
- * Extracts the given subvalue from an AvroValue instance.  If @ref
- * extract_scalar is true, and the result is a scalar Avro value, then
- * we extract out scalar value and push the Lua equivalent onto the
- * stack.  Otherwise, we push an AvroValue wrapper onto the stack.
- */
-
-static int
-get_subvalue(lua_State *L, avro_value_t *value,
-             int index_index, bool can_create, bool coerce_value)
-{
-    if (lua_isnumber(L, index_index)) {
-        /*
-         * We have an integer index.  If this is an array, look for the
-         * element with the given index.
-         */
-
-        lua_Integer  index = lua_tointeger(L, index_index);
-
-        if (avro_value_get_type(value) == AVRO_ARRAY) {
-            return get_array_element(L, value, index, coerce_value);
-        }
-    }
-
-    const char  *index_str = luaL_optstring(L, index_index, NULL);
-    if (index_str != NULL) {
-        /*
-         * We have a string index.  If this is a map, look for the value
-         * with the given key.  If this is a record, look for a field
-         * with that name.  If this is a union, activate the given
-         * branch and return it.
-         */
-
-        if (avro_value_get_type(value) == AVRO_MAP) {
-            return get_map_value(L, value, index_str, can_create, coerce_value);
-        }
-
-        if (avro_value_get_type(value) == AVRO_RECORD) {
-            return get_record_field(L, value, index_str, coerce_value);
-        }
-
-        if (avro_value_get_type(value) == AVRO_UNION) {
-            return get_union_branch(L, value, index_str, coerce_value);
-        }
-    }
-
-    /*
-     * If we fall through to here, we don't know how to handle this
-     * kind of index against this kind of value.
-     */
-
-    return 0;
-}
-
-
-/**
- * Returns the given subvalue in an AvroValue instance.
- */
-
-static int
-l_value_get(lua_State *L)
-{
-    avro_value_t  *value = lua_avro_get_value(L, 1);
-    return get_subvalue(L, value, 2, false, true);
-}
-
-
-/**
- * An implementation of the AvroValue class's __index metamethod.  It
- * first checks the MT_AVRO_VALUE_METHODS table to see if there's an
- * AvroValue method with the given name.  If not, then we fall back to
- * see if the AvroValue contains a subfield with that name.
- */
-
-static int
-l_value_index(lua_State *L)
-{
-    /*
-     * First see if the METHODS table contains a method function for
-     * the given key (which is at stack index 2).
-     */
-
-    luaL_getmetatable(L, MT_AVRO_VALUE_METHODS);
-    lua_pushvalue(L, 2);
-    lua_rawget(L, -2);
-
-    if (!lua_isnil(L, -1)) {
-        return 1;
-    }
-
-    /*
-     * Otherwise fall back on the AvroValue:get() method, which looks
-     * for a subvalue with the given name.  Pop off the METHODS table
-     * and nil value first.
-     */
-
-    lua_pop(L, 2);
-    return l_value_get(L);
-}
-
-
-/**
  * Sets the value value of an Avro scalar.  If the value is not a
  * scalar, we raise a Lua error.
  */
 
 static int
-set_scalar_value(lua_State *L, int self_index, int val_index)
+l_value_set(lua_State *L)
 {
-    avro_value_t  *value = lua_avro_get_value(L, self_index);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
 
     switch (avro_value_get_type(value))
     {
       case AVRO_STRING:
         {
             size_t  str_len;
-            const char  *str = luaL_checklstring(L, val_index, &str_len);
-            /* value length must include NUL terminatory */
+            const char  *str = luaL_checklstring(L, 2, &str_len);
+            /* value length must include NUL terminator */
             check(avro_value_set_string_len(value, (char *) str, str_len+1));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_BYTES:
         {
             size_t  len;
-            const char  *buf = luaL_checklstring(L, val_index, &len);
+            const char  *buf = luaL_checklstring(L, 2, &len);
             check(avro_value_set_bytes(value, (void *) buf, len));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_INT32:
         {
-            lua_Integer  i = luaL_checkinteger(L, val_index);
+            lua_Integer  i = luaL_checkinteger(L, 2);
             check(avro_value_set_int(value, i));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_INT64:
         {
-            long  l = luaL_checklong(L, val_index);
+            long  l = luaL_checklong(L, 2);
             check(avro_value_set_long(value, l));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_FLOAT:
         {
-            lua_Number  n = luaL_checknumber(L, val_index);
+            lua_Number  n = luaL_checknumber(L, 2);
             check(avro_value_set_float(value, (float) n));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_DOUBLE:
         {
-            lua_Number  n = luaL_checknumber(L, val_index);
+            lua_Number  n = luaL_checknumber(L, 2);
             check(avro_value_set_double(value, (double) n));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_BOOLEAN:
         {
-            int  b = lua_toboolean(L, val_index);
+            int  b = lua_toboolean(L, 2);
             check(avro_value_set_boolean(value, b));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_NULL:
         {
             check(avro_value_set_null(value));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_ENUM:
         {
-            const char  *symbol = luaL_checkstring(L, val_index);
+            const char  *symbol = luaL_checkstring(L, 2);
             avro_schema_t  enum_schema = avro_value_get_schema(value);
             int  symbol_value = avro_schema_enum_get_by_name(enum_schema, symbol);
             if (symbol_value < 0) {
                 return luaL_error(L, "No symbol named %s", symbol);
             }
             check(avro_value_set_enum(value, symbol_value));
-            lua_pushvalue(L, self_index);
-            return 1;
+            return 0;
         }
 
       case AVRO_FIXED:
         {
             size_t  len = 0;
-            const char  *buf = luaL_checklstring(L, val_index, &len);
+            const char  *buf = luaL_checklstring(L, 2, &len);
             check(avro_value_set_fixed(value, (void *) buf, len));
-            lua_pushvalue(L, self_index);
+            return 0;
+        }
+
+      case AVRO_MAP:
+        {
+            const char  *key = luaL_checkstring(L, 2);
+            avro_value_t  element_value;
+            check(avro_value_add(value, key, &element_value, NULL, NULL));
+            lua_avro_push_value(L, &element_value, NO_DESTRUCTOR);
+            return 1;
+        }
+
+      case AVRO_UNION:
+        {
+            if (lua_gettop(L) < 2) {
+                lua_pushliteral(L, "Missing index on UnionValue:set()");
+                return lua_error(L);
+            }
+
+            select_union_branch(L, value, 2);
             return 1;
         }
 
       default:
-        {
-            lua_pushliteral(L, "Avro value isn't a scalar");
-            return lua_error(L);
-        }
+        return luaL_error(L, "Don't know how to set in value type %d",
+                          avro_value_get_type(value));
     }
-}
-
-
-/**
- * Sets the value of a scalar (if called with one parameter), or the
- * given subvalue in a compound AvroValue (if called with two).
- */
-
-static int
-l_value_set(lua_State *L)
-{
-    int  nargs = lua_gettop(L);
-
-    /*
-     * If there are two arguments (including self), then the caller is
-     * trying to set the value of a scalar.
-     */
-
-    if (nargs == 2) {
-        return set_scalar_value(L, 1, 2);
-    }
-
-    /*
-     * If there are three arguments, then the caller is trying to set
-     * the value of a field/element/branch, which should be a scalar.
-     */
-
-    if (nargs == 3) {
-        avro_value_t  *value = lua_avro_get_value(L, 1);
-        if (!get_subvalue(L, value, 2, true, false)) {
-            lua_pushliteral(L, "Nonexistent subvalue");
-            return lua_error(L);
-        }
-
-        /*
-         * The new value will be pushed onto the top of the stack.
-         */
-
-        return set_scalar_value(L, -1, 3);
-    }
-
-    /*
-     * Bad number of arguments!
-     */
-
-    lua_pushliteral(L, "Bad number of arguments to AvroValue:set");
-    return lua_error(L);
-}
-
-
-/**
- * An implementation of the AvroValue class's __newindex metamethod.  It
- * first checks the MT_AVRO_VALUE_METHODS table to see if there's an
- * AvroValue method with the given name.  If so, you can't use this
- * syntax to set the field; you must use the set method, instead.
- */
-
-static int
-l_value_newindex(lua_State *L)
-{
-    /*
-     * First see if the METHODS table contains a method function for
-     * the given key (which is at stack index 2).
-     */
-
-    luaL_getmetatable(L, MT_AVRO_VALUE_METHODS);
-    lua_pushvalue(L, 2);
-    lua_rawget(L, -2);
-
-    if (!lua_isnil(L, -1)) {
-        lua_pushliteral(L, "Cannot set field with [] syntax");
-        return lua_error(L);
-    }
-
-    /*
-     * Otherwise fall back on the AvroValue:set() method, which looks
-     * for a subvalue with the given name.  Pop off the METHODS table
-     * and nil value first.
-     */
-
-    lua_pop(L, 2);
-    return l_value_set(L);
 }
 
 
@@ -810,7 +653,7 @@ l_value_set_from_ast(lua_State *L)
         case AVRO_STRING:
         case AVRO_ENUM:
         case AVRO_FIXED:
-            return set_scalar_value(L, 1, 2);
+            return l_value_set(L);
 
         case AVRO_ARRAY:
             {
@@ -908,19 +751,23 @@ l_value_set_from_ast(lua_State *L)
         case AVRO_UNION:
             {
                 if (lua_isnil(L, 2)) {
-                    get_union_branch(L, value, "null", false);
+                    lua_pushcfunction(L, l_value_set_from_ast);
+                    lua_pushliteral(L, "null");
+                    select_union_branch(L, value, -1);
+                    lua_replace(L, -2);
+                    lua_pushnil(L);
+                    lua_call(L, 2, 0);
                     return 0;
                 }
 
                 lua_pushnil(L);
-                if (lua_next(L, -2) == 0) {
+                if (lua_next(L, 2) == 0) {
                     lua_pushliteral(L, "Union AST must have exactly one element");
                     return lua_error(L);
                 }
 
-                const char  *branch_name = lua_tostring(L, -2);
                 lua_pushcfunction(L, l_value_set_from_ast);
-                get_union_branch(L, value, branch_name, false);
+                select_union_branch(L, value, -3);
                 lua_pushvalue(L, -3);
                 lua_call(L, 2, 0);
 
@@ -964,15 +811,6 @@ l_value_add(lua_State *L)
     check(avro_value_add(value, key, &element, NULL, NULL));
     lua_avro_push_value(L, &element, NO_DESTRUCTOR);
 
-    if (nargs == 3) {
-        /*
-         * If the caller provided a value, then the new element must be
-         * a scalar.
-         */
-
-        return set_scalar_value(L, -1, 3);
-    }
-
     /*
      * Otherwise just return the new element value.
      */
@@ -992,7 +830,6 @@ l_value_add(lua_State *L)
 static int
 l_value_append(lua_State *L)
 {
-    int  nargs = lua_gettop(L);
     avro_value_t  *value = lua_avro_get_value(L, 1);
 
     if (avro_value_get_type(value) != AVRO_ARRAY) {
@@ -1000,28 +837,9 @@ l_value_append(lua_State *L)
         return lua_error(L);
     }
 
-    if (nargs > 2) {
-        lua_pushliteral(L, "Bad number of arguments to AvroValue:append");
-        return lua_error(L);
-    }
-
     avro_value_t  element;
     check(avro_value_append(value, &element, NULL));
     lua_avro_push_value(L, &element, NO_DESTRUCTOR);
-
-    if (nargs == 2) {
-        /*
-         * If the caller provided a value, then the new element must be
-         * a scalar.
-         */
-
-        return set_scalar_value(L, -1, 2);
-    }
-
-    /*
-     * Otherwise just return the new element value.
-     */
-
     return 1;
 }
 
@@ -1084,11 +902,7 @@ iterate_array(lua_State *L)
     avro_value_t  element;
     check(avro_value_get_by_index(state->value, state->next_index, &element, NULL));
     lua_pushinteger(L, state->next_index+1);
-    if (state->no_scalar) {
-        lua_avro_push_value(L, &element, NO_DESTRUCTOR);
-    } else {
-        lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
-    }
+    lua_avro_push_value(L, &element, NO_DESTRUCTOR);
 
     state->next_index++;
     return 2;
@@ -1114,11 +928,7 @@ iterate_map(lua_State *L)
     check(avro_value_get_by_index(state->value, state->next_index, &element, &key));
 
     lua_pushstring(L, key);
-    if (state->no_scalar) {
-        lua_avro_push_value(L, &element, NO_DESTRUCTOR);
-    } else {
-        lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
-    }
+    lua_avro_push_value(L, &element, NO_DESTRUCTOR);
 
     state->next_index++;
     return 2;
@@ -1333,12 +1143,25 @@ lua_avro_get_schema(lua_State *L, int index)
  */
 
 static int
-l_schema_new_value(lua_State *L)
+l_schema_new_raw_value(lua_State *L)
 {
     LuaAvroSchema  *l_schema = luaL_checkudata(L, 1, MT_AVRO_SCHEMA);
     avro_value_t  value;
     check(avro_generic_value_new(l_schema->iface, &value));
     lua_avro_push_value(L, &value, GENERIC_DESTRUCTOR);
+    return 1;
+}
+
+static int
+l_schema_new_value(lua_State *L)
+{
+    lua_getglobal(L, "avro");
+    lua_pushliteral(L, "wrapper");
+    lua_rawget(L, -2);
+    lua_pushliteral(L, "Value");
+    lua_rawget(L, -2);
+    l_schema_new_raw_value(L);
+    lua_call(L, 1, 1);
     return 1;
 }
 
@@ -1496,12 +1319,25 @@ l_resolved_reader_gc(lua_State *L)
  */
 
 static int
-l_resolved_reader_new_value(lua_State *L)
+l_resolved_reader_new_raw_value(lua_State *L)
 {
     avro_value_iface_t  *resolver = lua_avro_get_resolved_reader(L, 1);
     avro_value_t  value;
     check(avro_resolved_reader_new_value(resolver, &value));
     lua_avro_push_value(L, &value, RESOLVED_READER_DESTRUCTOR);
+    return 1;
+}
+
+static int
+l_resolved_reader_new_value(lua_State *L)
+{
+    lua_getglobal(L, "avro");
+    lua_pushliteral(L, "wrapper");
+    lua_rawget(L, -2);
+    lua_pushliteral(L, "Value");
+    lua_rawget(L, -2);
+    l_resolved_reader_new_raw_value(L);
+    lua_call(L, 1, 1);
     return 1;
 }
 
@@ -1600,7 +1436,7 @@ l_resolved_writer_decode(lua_State *L)
         luaL_checkudata(L, 1, MT_AVRO_RESOLVED_WRITER);
     size_t  size = 0;
     const char  *buf = luaL_checklstring(L, 2, &size);
-    avro_value_t  *value = lua_avro_get_value(L, 3);
+    avro_value_t  *value = lua_avro_get_raw_value(L, 3);
 
     avro_reader_t  reader = avro_reader_memory(buf, size);
     avro_resolved_writer_set_dest(&l_resolver->value, value);
@@ -1634,7 +1470,7 @@ l_value_decode_raw(lua_State *L)
     }
     void  *buf = lua_touserdata(L, 2);
     size_t  size = luaL_checkinteger(L, 3);
-    avro_value_t  *value = lua_avro_get_value(L, 4);
+    avro_value_t  *value = lua_avro_get_raw_value(L, 4);
 
     avro_reader_t  reader = avro_reader_memory(buf, size);
     avro_resolved_writer_set_dest(&l_resolver->value, value);
@@ -1719,7 +1555,7 @@ l_input_file_close(lua_State *L)
  */
 
 static int
-l_input_file_read(lua_State *L)
+l_input_file_read_raw(lua_State *L)
 {
     int  nargs = lua_gettop(L);
     LuaAvroDataInputFile  *l_file =
@@ -1740,6 +1576,44 @@ l_input_file_read(lua_State *L)
     else {
         /* Otherwise read into the given value. */
         avro_value_t  *value = lua_avro_get_value(L, 2);
+        int  rc = avro_file_reader_read_value(l_file->reader, value);
+        if (rc != 0) {
+            return lua_return_avro_error(L);
+        }
+        lua_pushvalue(L, 2);
+        return 1;
+    }
+}
+
+static int
+l_input_file_read(lua_State *L)
+{
+    int  nargs = lua_gettop(L);
+    LuaAvroDataInputFile  *l_file =
+        luaL_checkudata(L, 1, MT_AVRO_DATA_INPUT_FILE);
+
+    if (nargs == 1) {
+        /* No Value instance given, so create one. */
+        avro_value_t  value;
+        check(avro_generic_value_new(l_file->iface, &value));
+        int  rc = avro_file_reader_read_value(l_file->reader, &value);
+        if (rc != 0) {
+            return lua_return_avro_error(L);
+        }
+
+        lua_getglobal(L, "avro");
+        lua_pushliteral(L, "wrapper");
+        lua_rawget(L, -2);
+        lua_pushliteral(L, "Value");
+        lua_rawget(L, -2);
+        lua_avro_push_value(L, &value, GENERIC_DESTRUCTOR);
+        lua_call(L, 1, 1);
+        return 1;
+    }
+
+    else {
+        /* Otherwise read into the given value. */
+        avro_value_t  *value = lua_avro_get_raw_value(L, 2);
         int  rc = avro_file_reader_read_value(l_file->reader, value);
         if (rc != 0) {
             return lua_return_avro_error(L);
@@ -1811,7 +1685,7 @@ l_output_file_write(lua_State *L)
 {
     avro_file_writer_t  writer = lua_avro_get_file_writer(L, 1);
 
-    avro_value_t  *value = lua_avro_get_value(L, 2);
+    avro_value_t  *value = lua_avro_get_raw_value(L, 2);
     check(avro_file_writer_append_value(writer, value));
     return 0;
 }
@@ -1870,9 +1744,9 @@ static const luaL_Reg  value_methods[] =
     {"get", l_value_get},
     {"hash", l_value_hash},
     {"iterate", l_value_iterate},
+    {"raw_value", l_value_raw_value},
     {"release", l_value_release},
     {"reset", l_value_reset},
-    {"scalar", l_value_scalar},
     {"set", l_value_set},
     {"set_from_ast", l_value_set_from_ast},
     {"set_source", l_value_set_source},
@@ -1884,6 +1758,7 @@ static const luaL_Reg  value_methods[] =
 
 static const luaL_Reg  schema_methods[] =
 {
+    {"new_raw_value", l_schema_new_raw_value},
     {"new_value", l_schema_new_value},
     {"type", l_schema_type},
     {NULL, NULL}
@@ -1892,6 +1767,7 @@ static const luaL_Reg  schema_methods[] =
 
 static const luaL_Reg  resolved_reader_methods[] =
 {
+    {"new_raw_value", l_resolved_reader_new_raw_value},
     {"new_value", l_resolved_reader_new_value},
     {NULL, NULL}
 };
@@ -1907,6 +1783,7 @@ static const luaL_Reg  resolved_writer_methods[] =
 static const luaL_Reg  input_file_methods[] =
 {
     {"close", l_input_file_close},
+    {"read_raw", l_input_file_read_raw},
     {"read", l_input_file_read},
     {NULL, NULL}
 };
@@ -1934,18 +1811,12 @@ static const luaL_Reg  mod_methods[] =
 };
 
 
-#define set_avro_const2(s1, s2)    \
-    lua_pushinteger(L, AVRO_##s1); \
-    lua_setfield(L, -2, #s2);
-
-#define set_avro_const(s)         \
-    lua_pushinteger(L, AVRO_##s); \
-    lua_setfield(L, -2, #s);
-
-
 int
 luaopen_avro_c_legacy(lua_State *L)
 {
+    luaL_loadstring(L, "require 'avro.wrapper'");
+    lua_call(L, 0, 0);
+
     /* AvroSchema metatable */
 
     luaL_newmetatable(L, MT_AVRO_SCHEMA);
@@ -1956,21 +1827,16 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
-    /* AvroValue metatables */
-
-    luaL_newmetatable(L, MT_AVRO_VALUE_METHODS);
-    luaL_register(L, NULL, value_methods);
-    lua_pop(L, 1);
+    /* AvroValue metatable */
 
     luaL_newmetatable(L, MT_AVRO_VALUE);
+    lua_createtable(L, 0, sizeof(value_methods) / sizeof(luaL_reg) - 1);
+    luaL_register(L, NULL, value_methods);
+    lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_value_eq);
     lua_setfield(L, -2, "__eq");
     lua_pushcfunction(L, l_value_tostring);
     lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, l_value_index);
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, l_value_newindex);
-    lua_setfield(L, -2, "__newindex");
     lua_pop(L, 1);
 
     luaL_newmetatable(L, MT_ITERATOR);
@@ -2019,22 +1885,5 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_pop(L, 1);
 
     luaL_register(L, "avro.c.legacy", mod_methods);
-
-    set_avro_const(BOOLEAN);
-    set_avro_const(BYTES);
-    set_avro_const(DOUBLE);
-    set_avro_const(FLOAT);
-    set_avro_const2(INT32, INT);
-    set_avro_const2(INT64, LONG);
-    set_avro_const(NULL);
-    set_avro_const(STRING);
-
-    set_avro_const(ARRAY);
-    set_avro_const(ENUM);
-    set_avro_const(FIXED);
-    set_avro_const(MAP);
-    set_avro_const(RECORD);
-    set_avro_const(UNION);
-
     return 1;
 }

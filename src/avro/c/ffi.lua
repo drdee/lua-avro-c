@@ -15,12 +15,17 @@
 
 local ffi = require "ffi"
 
+local ACC = require "avro.constants"
+local AW = require "avro.wrapper"
+
 local assert = assert
 local error = error
 local ipairs = ipairs
 local next = next
 local pairs = pairs
 local print = print
+local string = string
+local tostring = tostring
 local type = type
 
 module "avro.c.ffi"
@@ -221,21 +226,11 @@ local LuaAvroDataOutputFile
 ------------------------------------------------------------------------
 -- Constants
 
-STRING  =  0
-BYTES   =  1
-INT     =  2
-LONG    =  3
-FLOAT   =  4
-DOUBLE  =  5
-BOOLEAN =  6
-NULL    =  7
-RECORD  =  8
-ENUM    =  9
-FIXED   = 10
-MAP     = 11
-ARRAY   = 12
-UNION   = 13
-LINK    = 14
+for k,v in pairs(ACC) do
+   if string.sub(k,1,1) ~= "_" then
+      _M[k] = v
+   end
+end
 
 
 ------------------------------------------------------------------------
@@ -425,12 +420,16 @@ avro_value_to_json(const avro_value_t *value, int one_line, char **str);
 local Schema_class = {}
 local Schema_mt = { __index = Schema_class }
 
-function Schema_class:new_value()
+function Schema_class:new_raw_value()
    local value = LuaAvroValue()
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
    value.destructor = GENERIC_DESTRUCTOR
    return value
+end
+
+function Schema_class:new_value()
+   return AW.Value(self:new_raw_value())
 end
 
 function Schema_class:raw()
@@ -480,7 +479,7 @@ LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 -- Values
 
 local Value_class = {}
-local Value_mt = {}
+local Value_mt = { __index = Value_class }
 
 local v_char_p = ffi.new(char_p_ptr)
 local v_const_char_p = ffi.new(const_char_p_ptr)
@@ -501,198 +500,305 @@ function raw_value(v_ud)
    return self
 end
 
--- A helper method that returns the Lua equivalent for scalar values.
-local function lua_scalar(value)
-   local value_type = value:type()
+function wrapped_value(v_ud)
+   return AW.Value(raw_value(v_ud))
+end
+
+function Value_class:get(index)
+   local value_type = self:type()
    if value_type == BOOLEAN then
-      if value.iface.get_boolean == nil then
-         return false, "No implementation for get_boolean"
+      if self.iface.get_boolean == nil then
+         error "No implementation for get_boolean"
       end
-      local rc = value.iface.get_boolean(value.iface, value.self, v_int)
+      local rc = self.iface.get_boolean(self.iface, self.self, v_int)
       if rc ~= 0 then avro_error() end
-      return true, v_int[0] ~= 0
+      return v_int[0] ~= 0
    elseif value_type == BYTES then
       local size = ffi.new(int64_t_ptr)
-      if value.iface.get_bytes == nil then
-         return false, "No implementation for get_bytes"
+      if self.iface.get_bytes == nil then
+         error "No implementation for get_bytes"
       end
-      local rc = value.iface.get_bytes(value.iface, value.self, v_const_void_p, v_size)
+      local rc = self.iface.get_bytes(self.iface, self.self, v_const_void_p, v_size)
       if rc ~= 0 then avro_error() end
-      return true, ffi.string(v_const_void_p[0], v_size[0])
+      return ffi.string(v_const_void_p[0], v_size[0])
    elseif value_type == DOUBLE then
-      if value.iface.get_double == nil then
-         return false, "No implementation for get_double"
+      if self.iface.get_double == nil then
+         error "No implementation for get_double"
       end
-      local rc = value.iface.get_double(value.iface, value.self, v_double)
+      local rc = self.iface.get_double(self.iface, self.self, v_double)
       if rc ~= 0 then avro_error() end
-      return true, v_double[0]
+      return v_double[0]
    elseif value_type == FLOAT then
-      if value.iface.get_float == nil then
-         return false, "No implementation for get_float"
+      if self.iface.get_float == nil then
+         error "No implementation for get_float"
       end
-      local rc = value.iface.get_float(value.iface, value.self, v_float)
+      local rc = self.iface.get_float(self.iface, self.self, v_float)
       if rc ~= 0 then avro_error() end
-      return true, v_float[0]
+      return v_float[0]
    elseif value_type == INT then
-      if value.iface.get_int == nil then
-         return false, "No implementation for get_int"
+      if self.iface.get_int == nil then
+         error "No implementation for get_int"
       end
-      local rc = value.iface.get_int(value.iface, value.self, v_int32)
+      local rc = self.iface.get_int(self.iface, self.self, v_int32)
       if rc ~= 0 then avro_error() end
-      return true, v_int32[0]
+      return v_int32[0]
    elseif value_type == LONG then
-      if value.iface.get_long == nil then
-         return false, "No implementation for get_long"
+      if self.iface.get_long == nil then
+         error "No implementation for get_long"
       end
-      local rc = value.iface.get_long(value.iface, value.self, v_int64)
+      local rc = self.iface.get_long(self.iface, self.self, v_int64)
       if rc ~= 0 then avro_error() end
-      return true, v_int64[0]
+      return v_int64[0]
    elseif value_type == NULL then
-      if value.iface.get_null == nil then
-         return false, "No implementation for get_null"
+      if self.iface.get_null == nil then
+         error "No implementation for get_null"
       end
-      local rc = value.iface.get_null(value.iface, value.self)
+      local rc = self.iface.get_null(self.iface, self.self)
       if rc ~= 0 then avro_error() end
-      return true, nil
+      return nil
    elseif value_type == STRING then
       local size = ffi.new(int64_t_ptr)
-      if value.iface.get_string == nil then
-         return false, "No implementation for get_string"
+      if self.iface.get_string == nil then
+         error "No implementation for get_string"
       end
-      local rc = value.iface.get_string(value.iface, value.self, v_const_char_p, v_size)
+      local rc = self.iface.get_string(self.iface, self.self, v_const_char_p, v_size)
       if rc ~= 0 then avro_error() end
       -- size contains the NUL terminator
-      return true, ffi.string(v_const_char_p[0], v_size[0] - 1)
+      return ffi.string(v_const_char_p[0], v_size[0] - 1)
    elseif value_type == ENUM then
-      if value.iface.get_enum == nil then
-         return false, "No implementation for get_enum"
+      if self.iface.get_enum == nil then
+         error "No implementation for get_enum"
       end
-      local rc = value.iface.get_enum(value.iface, value.self, v_int)
+      local rc = self.iface.get_enum(self.iface, self.self, v_int)
       if rc ~= 0 then avro_error() end
-      local schema = value.iface.get_schema(value.iface, value.self)
+      local schema = self.iface.get_schema(self.iface, self.self)
       if schema == nil then avro_error() end
       local symbol_name = avro.avro_schema_enum_get(schema, v_int[0])
       if symbol_name == nil then avro_error() end
-      return true, ffi.string(symbol_name)
+      return ffi.string(symbol_name)
    elseif value_type == FIXED then
       local size = ffi.new(int64_t_ptr)
-      if value.iface.get_fixed == nil then
-         return false, "No implementation for get_fixed"
+      if self.iface.get_fixed == nil then
+         error "No implementation for get_fixed"
       end
-      local rc = value.iface.get_fixed(value.iface, value.self, v_const_void_p, v_size)
+      local rc = self.iface.get_fixed(self.iface, self.self, v_const_void_p, v_size)
       if rc ~= 0 then avro_error() end
-      return true, ffi.string(v_const_void_p[0], v_size[0])
+      return ffi.string(v_const_void_p[0], v_size[0])
+
+   elseif value_type == ARRAY then
+      if type(index) == "number" then
+         local rc = self.iface.get_size(self.iface, self.self, v_size)
+         if rc ~= 0 then return get_avro_error() end
+         if index < 1 or index > v_size[0] then
+            error "Index out of bounds"
+         end
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
+         if rc ~= 0 then avro_error() end
+         return element
+      end
+
+      error "Can only get integer index from array"
+
+   elseif value_type == MAP then
+      if type(index) == "string" then
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         local rc = self.iface.get_by_name(self.iface, self.self, index, element, v_size_t)
+         if rc ~= 0 then return get_avro_error() end
+         if element.self == nil then
+            error("No element named "..index)
+         else
+            return element, v_size_t[0]
+         end
+
+      elseif type(index) == "number" then
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         local rc = self.iface.get_by_index(self.iface, self.self, index,
+                                            element, v_const_char_p)
+         if rc ~= 0 then return get_avro_error() end
+         return element, ffi.string(v_const_char_p[0])
+      end
+
+      error "Can only get string or integer index from map"
+
+   elseif value_type == RECORD then
+      if type(index) == "string" then
+         local field = LuaAvroValue()
+         field.destructor = NO_DESTRUCTOR
+         local rc = self.iface.get_by_name(self.iface, self.self, index, field, nil)
+         if rc ~= 0 then return get_avro_error() end
+         return field
+
+      elseif type(index) == "number" then
+         local field = LuaAvroValue()
+         field.destructor = NO_DESTRUCTOR
+         local rc = self.iface.get_by_index(self.iface, self.self, index, field, nil)
+         if rc ~= 0 then return get_avro_error() end
+         return field
+      end
+
+      error "Can only get string index from record"
+
+   elseif value_type == UNION then
+      if type(index) == "string" then
+         local union_schema = self.iface.get_schema(self.iface, self.self)
+         local branch_schema = avro.avro_schema_union_branch_by_name(
+            union_schema, v_int, index
+         )
+         if branch_schema == nil then return get_avro_error() end
+         local branch = LuaAvroValue()
+         local rc = self.iface.set_branch(self.iface, self.self, v_int[0], branch)
+         if rc ~= 0 then return get_avro_error() end
+         return branch
+
+      elseif type(index) == "number" then
+         local branch = LuaAvroValue()
+         local rc = self.iface.set_branch(self.iface, self.self, index, branch)
+         if rc ~= 0 then return get_avro_error() end
+         return branch
+
+      elseif type(index) == "nil" then
+         local branch = LuaAvroValue()
+         branch.destructor = NO_DESTRUCTOR
+         local rc = self.iface.get_current_branch(self.iface, self.self, branch)
+         if rc ~= 0 then return get_avro_error() end
+         return branch
+      end
+
    else
-      return false, "Not a scalar"
+      error("Don't know how to get from value type "..tostring(value_type))
    end
 end
 
--- A helper method that returns a LuaAvroValue wrapper for non-scalar
--- values, and the Lua equivalent for scalar values.
-local function scalar_or_wrapper(value)
-   local is_scalar, scalar = lua_scalar(value)
-   if is_scalar then
-      return scalar
-   else
-      return value
-   end
-end
-
--- A helper method that sets the content of a scalar value.  If the
--- value isn't a scalar, we raise an error.
-local function set_scalar(value, val)
-   local value_type = value:type()
+function Value_class:set(val)
+   local value_type = self:type()
    if value_type == BOOLEAN then
-      if value.iface.set_boolean == nil then
+      if self.iface.set_boolean == nil then
          error "No implementation for set_boolean"
       end
-      local rc = value.iface.set_boolean(value.iface, value.self, val)
+      local rc = self.iface.set_boolean(self.iface, self.self, val)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == BYTES then
-      if value.iface.set_bytes == nil then
+      if self.iface.set_bytes == nil then
          error "No implementation for set_bytes"
       end
       local void_val = ffi.cast(void_p, val)
-      local rc = value.iface.set_bytes(value.iface, value.self, void_val, #val)
+      local rc = self.iface.set_bytes(self.iface, self.self, void_val, #val)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == DOUBLE then
-      if value.iface.set_double == nil then
+      if self.iface.set_double == nil then
          error "No implementation for set_double"
       end
-      local rc = value.iface.set_double(value.iface, value.self, val)
+      local rc = self.iface.set_double(self.iface, self.self, val)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == FLOAT then
-      if value.iface.set_float == nil then
+      if self.iface.set_float == nil then
          error "No implementation for set_float"
       end
-      local rc = value.iface.set_float(value.iface, value.self, val)
+      local rc = self.iface.set_float(self.iface, self.self, val)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == INT then
-      if value.iface.set_int == nil then
+      if self.iface.set_int == nil then
          error "No implementation for set_int"
       end
-      local rc = value.iface.set_int(value.iface, value.self, val)
+      local rc = self.iface.set_int(self.iface, self.self, val)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == LONG then
-      if value.iface.set_long == nil then
+      if self.iface.set_long == nil then
          error "No implementation for set_long"
       end
-      local rc = value.iface.set_long(value.iface, value.self, val)
+      local rc = self.iface.set_long(self.iface, self.self, val)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == NULL then
-      if value.iface.set_null == nil then
+      if self.iface.set_null == nil then
          error "No implementation for set_null"
       end
-      local rc = value.iface.set_null(value.iface, value.self)
+      local rc = self.iface.set_null(self.iface, self.self)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == STRING then
-      if value.iface.set_string_len == nil then
+      if self.iface.set_string_len == nil then
          error "No implementation for set_string_len"
       end
       -- length must include the NUL terminator
       local char_val = ffi.cast(char_p, val)
-      local rc = value.iface.set_string_len(value.iface, value.self, char_val, #val+1)
+      local rc = self.iface.set_string_len(self.iface, self.self, char_val, #val+1)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == ENUM then
-      if value.iface.set_enum == nil then
+      if self.iface.set_enum == nil then
          error "No implementation for set_enum"
       end
       local symbol_value
       if type(val) == "number" then
          symbol_value = val
       else
-         local schema = value.iface.get_schema(value.iface, value.self)
+         local schema = self.iface.get_schema(self.iface, self.self)
          if schema == nil then avro_error() end
          symbol_value = avro.avro_schema_enum_get_by_name(schema, val)
          if symbol_value < 0 then
             error("No symbol named "..val)
          end
       end
-      local rc = value.iface.set_enum(value.iface, value.self, symbol_value)
+      local rc = self.iface.set_enum(self.iface, self.self, symbol_value)
       if rc ~= 0 then avro_error() end
       return
    elseif value_type == FIXED then
-      if value.iface.set_fixed == nil then
+      if self.iface.set_fixed == nil then
          error "No implementation for set_fixed"
       end
       local void_val = ffi.cast(void_p, val)
-      local rc = value.iface.set_fixed(value.iface, value.self, void_val, #val)
+      local rc = self.iface.set_fixed(self.iface, self.self, void_val, #val)
       if rc ~= 0 then avro_error() end
       return
+
+   elseif value_type == MAP then
+      if type(val) == "string" then
+         local element = LuaAvroValue()
+         element.destructor = NO_DESTRUCTOR
+         local rc = self.iface.add(self.iface, self.self, val, element, nil, nil)
+         if rc ~= 0 then return get_avro_error() end
+         return element
+      end
+
+      return nil, "Can only set string index in map"
+
+   elseif value_type == UNION then
+      if type(val) == "string" then
+         local union_schema = self.iface.get_schema(self.iface, self.self)
+         local branch_schema = avro.avro_schema_union_branch_by_name(
+            union_schema, v_int, val
+         )
+         if branch_schema == nil then return get_avro_error() end
+         local branch = LuaAvroValue()
+         local rc = self.iface.set_branch(self.iface, self.self, v_int[0], branch)
+         if rc ~= 0 then return get_avro_error() end
+         return branch
+
+      elseif type(val) == "number" then
+         local branch = LuaAvroValue()
+         local rc = self.iface.set_branch(self.iface, self.self, val, branch)
+         if rc ~= 0 then return get_avro_error() end
+         return branch
+      end
+
+      return nil, "Can only set string or integer index in union"
+
    else
-      error("Avro value isn't a scalar")
+      error("Don't know how to set in value type "..tostring(value_type))
    end
 end
 
-function Value_class:append(element_val)
+function Value_class:append()
    if self:type() ~= ARRAY then
       error("Can only append to an array")
    end
@@ -705,14 +811,10 @@ function Value_class:append(element_val)
    local rc = self.iface.append(self.iface, self.self, element, nil)
    if rc ~= 0 then avro_error() end
 
-   if element_val then
-      set_scalar(element, element_val)
-   end
-
    return element
 end
 
-function Value_class:add(key, element_val)
+function Value_class:add(key)
    if self:type() ~= MAP then
       error("Can only add to a map")
    end
@@ -724,10 +826,6 @@ function Value_class:add(key, element_val)
    local element = LuaAvroValue()
    local rc = self.iface.add(self.iface, self.self, key, element, nil, nil)
    if rc ~= 0 then avro_error() end
-
-   if element_val then
-      set_scalar(element, element_val)
-   end
 
    return element
 end
@@ -799,94 +897,6 @@ function raw_encode_value(self, buf, size)
    end
 end
 
-local function get_child(self, index, coerce_scalar)
-   if type(index) == "number" then
-      local value_type = self:type()
-      if value_type == ARRAY then
-         local rc = self.iface.get_size(self.iface, self.self, v_size)
-         if rc ~= 0 then return get_avro_error() end
-         if index < 1 or index > v_size[0] then
-            return nil, "Index out of bounds"
-         end
-         local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
-         rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
-         if rc ~= 0 then avro_error() end
-         if coerce_scalar then
-            return scalar_or_wrapper(element)
-         else
-            return element
-         end
-      end
-
-      return nil, "Can only get integer index from arrays"
-
-   elseif type(index) == "string" then
-      local value_type = self:type()
-
-      if value_type == MAP then
-         local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
-         local rc = self.iface.get_by_name(self.iface, self.self, index, element, nil)
-         if rc ~= 0 then return get_avro_error() end
-         if coerce_scalar then
-            return scalar_or_wrapper(element)
-         else
-            return element
-         end
-
-      elseif value_type == RECORD then
-         local field = LuaAvroValue()
-         field.destructor = NO_DESTRUCTOR
-         local rc = self.iface.get_by_name(self.iface, self.self, index, field, nil)
-         if rc ~= 0 then return get_avro_error() end
-         if coerce_scalar then
-            return scalar_or_wrapper(field)
-         else
-            return field
-         end
-
-      elseif value_type == UNION then
-         if index == "_" then
-            local branch = LuaAvroValue()
-            branch.destructor = NO_DESTRUCTOR
-            local rc = self.iface.get_current_branch(self.iface, self.self, branch)
-            if rc ~= 0 then return get_avro_error() end
-            if coerce_scalar then
-               return scalar_or_wrapper(branch)
-            else
-               return branch
-            end
-         else
-            local union_schema = self.iface.get_schema(self.iface, self.self)
-            local branch_schema = avro.avro_schema_union_branch_by_name(
-               union_schema, v_int, index
-            )
-            if branch_schema == nil then return get_avro_error() end
-            local branch = LuaAvroValue()
-            local rc = self.iface.set_branch(
-               self.iface, self.self,
-               v_int[0], branch
-            )
-            if rc ~= 0 then return get_avro_error() end
-            if coerce_scalar then
-               return scalar_or_wrapper(branch)
-            else
-               return branch
-            end
-         end
-      end
-
-      return nil, "Can only get string index from map, record, or union"
-   end
-
-   return nil, "Can only get integer or string index"
-end
-
-function Value_class:get(index)
-   return get_child(self, index, true)
-end
-
 local function iterate_array(state, unused)
    -- NOTE: state.next_index is 0-based
    -- Have we reached the end?
@@ -900,13 +910,7 @@ local function iterate_array(state, unused)
    if rc ~= 0 then avro_error() end
    state.next_index = state.next_index + 1
    -- Result should be a 1-based index for Lua
-   local element_result
-   if state.no_scalar then
-      element_result = element
-   else
-      element_result = scalar_or_wrapper(element)
-   end
-   return state.next_index, element_result
+   return state.next_index, element
 end
 
 local function iterate_map(state, unused)
@@ -922,16 +926,10 @@ local function iterate_map(state, unused)
    )
    if rc ~= 0 then avro_error() end
    state.next_index = state.next_index + 1
-   local element_result
-   if state.no_scalar then
-      element_result = element
-   else
-      element_result = scalar_or_wrapper(element)
-   end
-   return ffi.string(key[0]), element_result
+   return ffi.string(key[0]), element
 end
 
-function Value_class:iterate(no_scalar)
+function Value_class:iterate()
    local value_type = self:type()
 
    if value_type == ARRAY then
@@ -955,92 +953,12 @@ function Value_class:iterate(no_scalar)
          length = v_size[0],
       }
       return iterate_map, state, nil
-   end
-end
 
-function Value_class:scalar()
-   local is_scalar, scalar = lua_scalar(self)
-   if is_scalar then
-      return scalar
    else
-      error("Value isn't a scalar")
+      error "Can only iterate arrays and maps"
    end
 end
 
-local function create_element(value, index)
-   if type(index) == "number" then
-      local value_type = value:type()
-      if value_type == ARRAY then
-         local rc = self.iface.get_size(self.iface, self.self, v_size)
-         if rc ~= 0 then return get_avro_error() end
-         if index < 1 or index > v_size[0] then
-            return nil, "Index out of bounds"
-         end
-         local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
-         rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
-         if rc ~= 0 then avro_error() end
-         return element
-      end
-
-      return nil, "Can only get integer index from arrays"
-
-   elseif type(index) == "string" then
-      local value_type = value:type()
-
-      if value_type == MAP then
-         local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
-         local rc = value.iface.add(value.iface, value.self, index, element, nil, nil)
-         if rc ~= 0 then return get_avro_error() end
-         return element
-
-      elseif value_type == RECORD then
-         local field = LuaAvroValue()
-         field.destructor = NO_DESTRUCTOR
-         local rc = value.iface.get_by_name(value.iface, value.self, index, field, nil)
-         if rc ~= 0 then return get_avro_error() end
-         return field
-
-      elseif value_type == UNION then
-         if index == "_" then
-            local branch = LuaAvroValue()
-            branch.destructor = NO_DESTRUCTOR
-            local rc = value.iface.get_current_branch(value.iface, value.self, branch)
-            if rc ~= 0 then return get_avro_error() end
-            return branch
-         else
-            local union_schema = value.iface.get_schema(value.iface, value.self)
-            local branch_schema = avro.avro_schema_union_branch_by_name(
-               union_schema, v_int, index
-            )
-            if branch_schema == nil then return get_avro_error() end
-            local branch = LuaAvroValue()
-            local rc = value.iface.set_branch(
-               value.iface, value.self,
-               v_int[0], branch
-            )
-            if rc ~= 0 then return get_avro_error() end
-            return branch
-         end
-      end
-
-      return nil, "Can only get string index from map, record, or union"
-   end
-
-   return nil, "Can only get integer or string index"
-end
-
-function Value_class:set(arg1, arg2)
-   if arg2 then
-      local index, val = arg1, arg2
-      local element, err = create_element(self, index)
-      if not element then return element, err end
-      set_scalar(element, val)
-   else
-      set_scalar(self, arg1)
-   end
-end
 
 -- Fills in the contents of an Avro value from a pure-Lua AST.  For
 -- scalars, we expect a compatible Lua scalar value.  For maps and
@@ -1061,7 +979,7 @@ function Value_class:set_from_ast(ast)
    or value_type == STRING
    or value_type == ENUM
    or value_type == FIXED then
-      set_scalar(self, ast)
+      self:set(ast)
 
    elseif value_type == ARRAY then
       self:reset()
@@ -1079,22 +997,22 @@ function Value_class:set_from_ast(ast)
 
    elseif value_type == RECORD then
       for k,v in pairs(ast) do
-         local field = assert(get_child(self, k, false))
+         local field = assert(self:get(k))
          field:set_from_ast(v)
       end
 
    elseif value_type == UNION then
       if ast == nil then
-         local branch = assert(get_child(self, "null", false))
-         branch:set_from_ast(nil)
+         assert(self:set("null"))
+         self:get():set_from_ast(nil)
 
       else
          local k,v = next(ast)
          if not k then
             error "Union AST must have exactly one element"
          end
-         local branch = assert(get_child(self, k, false))
-         branch:set_from_ast(v)
+         assert(self:set(k))
+         self:get():set_from_ast(v)
       end
    end
 end
@@ -1105,6 +1023,10 @@ end
 
 function Value_class:hash()
    return avro.avro_value_hash(self)
+end
+
+function Value_class:raw_value()
+   return self
 end
 
 function Value_class:reset()
@@ -1136,29 +1058,6 @@ function Value_class:to_json()
 end
 
 Value_mt.__tostring = Value_class.to_json
-
-function Value_mt:__index(idx)
-   -- First try Value_class; if there's a function with the given name,
-   -- then that's our result.
-   local result = Value_class[idx]
-   if result then return result end
-
-   -- Otherwise defer to the get() method.
-   return Value_class.get(self, idx)
-end
-
-function Value_mt:__newindex(idx, value)
-   -- First try Value_class; if there's a function with the given name,
-   -- then you need to use the set() method directly.  (We don't want
-   -- the caller to overwrite any methods.)
-   local result = Value_class[idx]
-   if result then error("Cannot set field with [] syntax") end
-
-   -- Otherwise mimic the set() method.
-   local element, err = create_element(self, idx)
-   if not element then return element, err end
-   set_scalar(element, value)
-end
 
 function Value_mt:__eq(other)
    local eq = avro.avro_value_equal(self, other)
@@ -1194,12 +1093,16 @@ LuaAvroValue = ffi.metatype([[avro_value_t]], Value_mt)
 local ResolvedReader_class = {}
 local ResolvedReader_mt = { __index = ResolvedReader_class }
 
-function ResolvedReader_class:new_value()
+function ResolvedReader_class:new_raw_value()
    local value = LuaAvroValue()
    local rc = avro.avro_resolved_reader_new_value(self.resolver, value)
    if rc ~= 0 then avro_error() end
    value.destructor = RESOLVED_READER_DESTRUCTOR
    return value
+end
+
+function ResolvedReader_class:new_value()
+   return AW.Value(self:new_raw_value())
 end
 
 function ResolvedReader_mt:__gc()
@@ -1228,7 +1131,7 @@ local memory_reader = avro.avro_reader_memory(nil, 0)
 
 function raw_decode_value(resolver, buf, size, dest)
    avro.avro_reader_memory_set_source(memory_reader, buf, size)
-   avro.avro_resolved_writer_set_dest(resolver.value, dest)
+   avro.avro_resolved_writer_set_dest(resolver.value, dest:raw_value())
    local rc = avro.avro_value_read(memory_reader, resolver.value)
    if rc == 0 then
       return true
@@ -1279,7 +1182,7 @@ local function new_input_file(reader)
    return l_reader
 end
 
-function DataInputFile_class:read(value)
+function DataInputFile_class:read_raw(value)
    if not value then
       value = LuaAvroValue()
       local rc = avro.avro_generic_value_new(self.iface, value)
@@ -1297,6 +1200,16 @@ function DataInputFile_class:read(value)
    local rc = avro.avro_file_reader_read_value(self.reader, value)
    if rc ~= 0 then return get_avro_error() end
    return value
+end
+
+function DataInputFile_class:read(value)
+   if not value then
+      value = self:read_raw()
+      if not value then return value else return AW.Value(value) end
+   else
+      local result = self:read_raw(value.raw)
+      if not result then return result else return value end
+   end
 end
 
 function DataInputFile_class:close()
@@ -1320,7 +1233,7 @@ local DataOutputFile_class = {}
 local DataOutputFile_mt = { __index = DataOutputFile_class }
 
 function DataOutputFile_class:write(value)
-   local rc = avro.avro_file_writer_append_value(self.writer, value)
+   local rc = avro.avro_file_writer_append_value(self.writer, value:raw_value())
    if rc ~= 0 then avro_error() end
 end
 

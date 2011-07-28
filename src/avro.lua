@@ -7,17 +7,35 @@
 -- details.
 ------------------------------------------------------------------------
 
--- Loads either avro.c.legacy or avro.c.ffi, depending on whether the
--- LuaJIT FFI module is available.
+local AC = require "avro.c"
+local ACC = require "avro.constants"
 
-local ffi_present = pcall(require, "ffi")
-local mod
-if ffi_present then
-   --print("Loading ffi version")
-   mod = require("avro.c.ffi")
-else
-   --print("Loading legacy version")
-   mod = require("avro.c.legacy")
+local pairs = pairs
+local print = print
+local setmetatable = setmetatable
+local string = string
+
+module "avro"
+
+------------------------------------------------------------------------
+-- Constants
+
+for k,v in pairs(ACC) do
+   if string.sub(k,1,1) ~= "_" then
+      _M[k] = v
+   end
 end
-mod.ffi_present = ffi_present
-return mod
+
+
+------------------------------------------------------------------------
+-- Copy a bunch of public functions from the C module.
+
+ArraySchema = AC.ArraySchema
+ResolvedReader = AC.ResolvedReader
+ResolvedWriter = AC.ResolvedWriter
+Schema = AC.Schema
+open = AC.open
+raw_decode_value = AC.raw_decode_value
+raw_encode_value = AC.raw_encode_value
+raw_value = AC.raw_value
+wrapped_value = AC.wrapped_value

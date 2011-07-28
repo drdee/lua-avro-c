@@ -26,7 +26,9 @@ build = {
    type = "builtin",
    modules = {
       avro = "src/avro.lua",
-      ["avro.test"] = "src/avro/test.lua",
+      ["avro.constants"] = "src/avro/constants.lua",
+      ["avro.wrapper"] = "src/avro/wrapper.lua",
+      ["avro.c"] = "src/avro/c.lua",
       ["avro.c.legacy"] = {
          sources = {"src/avro/c/legacy.c"},
          libraries = {"avro"},
@@ -34,5 +36,8 @@ build = {
          libdirs = {"$(AVRO_LIBDIR)"},
       },
       ["avro.c.ffi"] = "src/avro/c/ffi.lua",
+      ["avro.test"] = "src/avro/test.lua",
+      ["avro.tests.raw"] = "src/avro/tests/raw.lua",
+      ["avro.tests.wrapper"] = "src/avro/tests/wrapper.lua",
    },
 }
