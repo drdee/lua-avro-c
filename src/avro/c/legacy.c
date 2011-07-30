@@ -1036,7 +1036,7 @@ l_value_encode_raw(lua_State *L)
  */
 
 static int
-l_value_gc(lua_State *L)
+l_value_release(lua_State *L)
 {
     LuaAvroValue  *l_value = luaL_checkudata(L, 1, MT_AVRO_VALUE);
     if (l_value->destructor == GENERIC_DESTRUCTOR &&
@@ -1653,6 +1653,7 @@ static const luaL_Reg  value_methods[] =
     {"get", l_value_get},
     {"hash", l_value_hash},
     {"iterate", l_value_iterate},
+    {"release", l_value_release},
     {"scalar", l_value_scalar},
     {"set", l_value_set},
     {"set_source", l_value_set_source},
@@ -1750,8 +1751,6 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_value_newindex);
     lua_setfield(L, -2, "__newindex");
-    lua_pushcfunction(L, l_value_gc);
-    lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
     luaL_newmetatable(L, MT_ITERATOR);

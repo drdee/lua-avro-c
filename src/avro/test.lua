@@ -79,6 +79,8 @@ do
       assert(deepcompare(actual, expected))
       assert(array == array2)
       assert(array:hash() == array2:hash())
+      array:release()
+      array2:release()
    end
 
    test_array("int", { 1,2,3,4 })
@@ -104,6 +106,8 @@ do
       assert(deepcompare(actual, expected))
       assert(map == map2)
       assert(map:hash() == map2:hash())
+      map:release()
+      map2:release()
    end
 
    test_map("int", { a=1,b=2,c=3,d=4 })
@@ -125,6 +129,8 @@ do
 
       value:set(scalar)
       assert(resolved:scalar() == scalar)
+      value:release()
+      resolved:release()
    end
 
    test_good_scalar("int", "int", 42)
@@ -169,6 +175,11 @@ do
 
    assert(val1 ~= val2)
    assert(resolved1 == resolved2)
+
+   val1:release()
+   val2:release()
+   resolved1:release()
+   resolved2:release()
 end
 
 ------------------------------------------------------------------------
@@ -238,6 +249,7 @@ do
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
+      actual:release()
    end
 
    test_boolean("\000", false)
@@ -249,6 +261,7 @@ do
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
+      actual:release()
    end
 
    test_int("\000", 0)
@@ -266,6 +279,7 @@ do
       value:set(prim_value)
       local actual_buf = assert(value:encode())
       assert(actual_buf == expected_buf)
+      value:release()
    end
 
    test_boolean("\000", false)
@@ -278,6 +292,8 @@ do
       value:set(prim_value)
       local actual_buf = assert(value:encode())
       assert(actual_buf == expected_buf)
+      actual:release()
+      value:release()
    end
 
    test_int("\000", 0)
@@ -302,6 +318,7 @@ do
    end
 
    writer:close()
+   value:release()
 
    local reader, actual
 
@@ -312,6 +329,7 @@ do
    value = reader:read()
    while value do
       table.insert(actual, value:scalar())
+      value:release()
       value = reader:read()
    end
    reader:close()
@@ -320,12 +338,13 @@ do
    reader = A.open(filename)
    actual = {}
    value = schema:new_value()
-   value = reader:read(value)
-   while value do
+   local ok = reader:read(value)
+   while ok do
       table.insert(actual, value:scalar())
-      value = reader:read(value)
+      ok = reader:read(value)
    end
    reader:close()
+   value:release()
    assert(deepcompare(expected, actual))
 
    -- And cleanup

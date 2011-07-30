@@ -54,9 +54,9 @@ end
 
 -- Note that the avro_value_t definition below does not exactly match
 -- the one from the Avro C library.  We need to store an additional
--- field, indicating whether the value was created with
--- avro_generic_value_new (and therefore should be freed in its __gc
--- metamethod).  Ideally, we'd use a wrapper struct like this:
+-- field, indicating which destructor should be used to free the value
+-- in its release() method.  Ideally, we'd use a wrapper struct like
+-- this:
 --
 -- typedef struct LuaAvroValue {
 --     avro_value_t  value;
@@ -1019,7 +1019,7 @@ function Value_mt:__eq(other)
    return eq ~= 0
 end
 
-function Value_mt:__gc()
+function Value_class:release()
    if self.destructor == GENERIC_DESTRUCTOR and self.self ~= nil then
       avro.avro_generic_value_free(self)
    elseif self.destructor == RESOLVED_READER_DESTRUCTOR and self.self ~= nil then
@@ -1029,6 +1029,16 @@ function Value_mt:__gc()
    self.self = nil
    self.destructor = NO_DESTRUCTOR
 end
+
+--[==[
+-- UNCOMMENT THIS TO CHECK release() calls
+function Value_mt:__gc()
+   if self.self and self.destructor ~= NO_DESTRUCTOR then
+      print("Warning: Freeing non-released value ", self.self, self.destructor)
+      self:release()
+   end
+end
+--]==]
 
 LuaAvroValue = ffi.metatype([[avro_value_t]], Value_mt)
 
@@ -1129,6 +1139,13 @@ function DataInputFile_class:read(value)
       local rc = avro.avro_generic_value_new(self.iface, value)
       if rc ~= 0 then avro_error() end
       value.destructor = GENERIC_DESTRUCTOR
+
+      local rc = avro.avro_file_reader_read_value(self.reader, value)
+      if rc ~= 0 then
+         value:release()
+         return get_avro_error()
+      end
+      return value
    end
 
    local rc = avro.avro_file_reader_read_value(self.reader, value)
