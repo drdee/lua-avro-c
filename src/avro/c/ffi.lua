@@ -15,7 +15,11 @@
 
 local ffi = require "ffi"
 
+local assert = assert
 local error = error
+local ipairs = ipairs
+local next = next
+local pairs = pairs
 local print = print
 local type = type
 
@@ -395,6 +399,10 @@ avro_schema_type_name(const avro_schema_t schema);
 
 avro_schema_t
 avro_schema_union_branch(avro_schema_t schema, int discriminant);
+
+avro_schema_t
+avro_schema_union_branch_by_name(avro_schema_t schema, int *branch_index,
+                                 const char *branch_name);
 ]]
 
 -- avro/value.h
@@ -693,6 +701,26 @@ function Value_class:append(element_val)
    return element
 end
 
+function Value_class:add(key, element_val)
+   if self:type() ~= MAP then
+      error("Can only add to a map")
+   end
+
+   if self.iface.add == nil then
+      error "No implementation for add"
+   end
+
+   local element = LuaAvroValue()
+   local rc = self.iface.add(self.iface, self.self, key, element, nil, nil)
+   if rc ~= 0 then avro_error() end
+
+   if element_val then
+      set_scalar(element, element_val)
+   end
+
+   return element
+end
+
 function Value_class:discriminant()
    if self:type() ~= UNION then
       error("Can't get discriminant of a non-union value")
@@ -760,7 +788,7 @@ function raw_encode_value(self, buf, size)
    end
 end
 
-function Value_class:get(index)
+local function get_child(self, index, coerce_scalar)
    if type(index) == "number" then
       local value_type = self:type()
       if value_type == ARRAY then
@@ -773,7 +801,11 @@ function Value_class:get(index)
          element.destructor = NO_DESTRUCTOR
          rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
          if rc ~= 0 then avro_error() end
-         return scalar_or_wrapper(element)
+         if coerce_scalar then
+            return scalar_or_wrapper(element)
+         else
+            return element
+         end
       end
 
       return nil, "Can only get integer index from arrays"
@@ -786,14 +818,22 @@ function Value_class:get(index)
          element.destructor = NO_DESTRUCTOR
          local rc = self.iface.get_by_name(self.iface, self.self, index, element, nil)
          if rc ~= 0 then return get_avro_error() end
-         return scalar_or_wrapper(element)
+         if coerce_scalar then
+            return scalar_or_wrapper(element)
+         else
+            return element
+         end
 
       elseif value_type == RECORD then
          local field = LuaAvroValue()
          field.destructor = NO_DESTRUCTOR
          local rc = self.iface.get_by_name(self.iface, self.self, index, field, nil)
          if rc ~= 0 then return get_avro_error() end
-         return scalar_or_wrapper(field)
+         if coerce_scalar then
+            return scalar_or_wrapper(field)
+         else
+            return field
+         end
 
       elseif value_type == UNION then
          if index == "_" then
@@ -801,7 +841,11 @@ function Value_class:get(index)
             branch.destructor = NO_DESTRUCTOR
             local rc = self.iface.get_current_branch(self.iface, self.self, branch)
             if rc ~= 0 then return get_avro_error() end
-            return scalar_or_wrapper(branch)
+            if coerce_scalar then
+               return scalar_or_wrapper(branch)
+            else
+               return branch
+            end
          else
             local union_schema = self.iface.get_schema(self.iface, self.self)
             local branch_schema = avro.avro_schema_union_branch_by_name(
@@ -814,7 +858,11 @@ function Value_class:get(index)
                v_int[0], branch
             )
             if rc ~= 0 then return get_avro_error() end
-            return scalar_or_wrapper(branch)
+            if coerce_scalar then
+               return scalar_or_wrapper(branch)
+            else
+               return branch
+            end
          end
       end
 
@@ -822,6 +870,10 @@ function Value_class:get(index)
    end
 
    return nil, "Can only get integer or string index"
+end
+
+function Value_class:get(index)
+   return get_child(self, index, true)
 end
 
 local function iterate_array(state, unused)
@@ -965,12 +1017,77 @@ function Value_class:set(arg1, arg2)
    end
 end
 
+-- Fills in the contents of an Avro value from a pure-Lua AST.  For
+-- scalars, we expect a compatible Lua scalar value.  For maps and
+-- records, we expect a table.  For arrays, we expect an array-like
+-- table.  For unions, we expect a scalar nil (if the union contains a
+-- null schema), or a single-element table whose key is the name of one
+-- of the union schemas.
+function Value_class:set_from_ast(ast)
+   local value_type = self:type()
+
+   if value_type == BOOLEAN
+   or value_type == BYTES
+   or value_type == DOUBLE
+   or value_type == FLOAT
+   or value_type == INT
+   or value_type == LONG
+   or value_type == NULL
+   or value_type == STRING
+   or value_type == ENUM
+   or value_type == FIXED then
+      set_scalar(self, ast)
+
+   elseif value_type == ARRAY then
+      self:reset()
+      for i,v in ipairs(ast) do
+         local element = self:append()
+         element:set_from_ast(v)
+      end
+
+   elseif value_type == MAP then
+      self:reset()
+      for k,v in pairs(ast) do
+         local element = self:add(k)
+         element:set_from_ast(v)
+      end
+
+   elseif value_type == RECORD then
+      for k,v in pairs(ast) do
+         local field = assert(get_child(self, k, false))
+         field:set_from_ast(v)
+      end
+
+   elseif value_type == UNION then
+      if ast == nil then
+         local branch = assert(get_child(self, "null", false))
+         branch:set_from_ast(nil)
+
+      else
+         local k,v = next(ast)
+         if not k then
+            error "Union AST must have exactly one element"
+         end
+         local branch = assert(get_child(self, k, false))
+         branch:set_from_ast(v)
+      end
+   end
+end
+
 function Value_class:type()
    return self.iface.get_type(self.iface, self.self)
 end
 
 function Value_class:hash()
    return avro.avro_value_hash(self)
+end
+
+function Value_class:reset()
+   if self.iface.reset ~= nil then
+      self.iface.reset(self.iface, self.self)
+   else
+      error "No implementation for Value:reset()"
+   end
 end
 
 function Value_class:set_source(src)
@@ -1010,8 +1127,10 @@ function Value_mt:__newindex(idx, value)
    local result = Value_class[idx]
    if result then error("Cannot set field with [] syntax") end
 
-   -- Otherwise defer to the set() method.
-   return Value_class.set(self, idx, value)
+   -- Otherwise mimic the set() method.
+   local element, err = create_element(self, idx)
+   if not element then return element, err end
+   set_scalar(element, value)
 end
 
 function Value_mt:__eq(other)
