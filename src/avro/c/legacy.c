@@ -198,6 +198,19 @@ l_value_set_source(lua_State *L)
 
 
 /**
+ * Resets a value.
+ */
+
+static int
+l_value_reset(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    check(avro_value_reset(value));
+    return 0;
+}
+
+
+/**
  * If @ref value is an Avro scalar, we push the Lua equivalent onto
  * the stack.  If the value is not a scalar, and @ref require_scalar
  * is true, we raise a Lua error.  Otherwise, we push a new AvroValue
@@ -772,6 +785,203 @@ l_value_newindex(lua_State *L)
 
 
 /**
+ * Fills in the contents of an Avro value from a pure-Lua AST.  For
+ * scalars, we expect a compatible Lua scalar value.  For maps and
+ * records, we expect a table.  For arrays, we expect an array-like
+ * table.  For unions, we expect a scalar nil (if the union contains a
+ * null schema), or a single-element table whose key is the name of one
+ * of the union schemas.
+ */
+
+static int
+l_value_set_from_ast(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+
+    switch (avro_value_get_type(value))
+    {
+        case AVRO_BOOLEAN:
+        case AVRO_BYTES:
+        case AVRO_DOUBLE:
+        case AVRO_FLOAT:
+        case AVRO_INT32:
+        case AVRO_INT64:
+        case AVRO_NULL:
+        case AVRO_STRING:
+        case AVRO_ENUM:
+        case AVRO_FIXED:
+            return set_scalar_value(L, 1, 2);
+
+        case AVRO_ARRAY:
+            {
+                size_t  elements = lua_objlen(L, 2);
+                size_t  i;
+
+                check(avro_value_reset(value));
+
+                for (i = 0; i < elements; i++) {
+                    avro_value_t  child;
+                    check(avro_value_append(value, &child, NULL));
+                    lua_pushcfunction(L, l_value_set_from_ast);
+                    lua_avro_push_value(L, &child, NO_DESTRUCTOR);
+                    lua_rawgeti(L, 2, i+1);
+                    lua_call(L, 2, 0);
+                }
+
+                return 0;
+            }
+
+        case AVRO_MAP:
+            {
+                lua_pushnil(L);
+                while (lua_next(L, -2) != 0) {
+                    /* Stack is now: -3 AST table; -2 key; -1 value */
+
+                    /*
+                     * Push a copy of the key so we can safely call
+                     * lua_tolstring to get a string key
+                     */
+
+                    const char  *key;
+                    lua_pushvalue(L, -2);
+                    key = lua_tostring(L, -1);
+
+                    /* Stack is now:
+                     * -4 AST table
+                     * -3 key
+                     * -2 value
+                     * -1 copied string key
+                     */
+
+                    avro_value_t  child;
+                    check(avro_value_add(value, key, &child, NULL, NULL));
+                    lua_pushcfunction(L, l_value_set_from_ast);
+                    lua_avro_push_value(L, &child, NO_DESTRUCTOR);
+                    lua_pushvalue(L, -5);
+                    lua_rawget(L, -7);
+                    lua_call(L, 2, 0);
+
+                    /* Pop off value and copied key to continue loop */
+                    lua_pop(L, 2);
+                }
+
+                return 0;
+            }
+
+        case AVRO_RECORD:
+            {
+                lua_pushnil(L);
+                while (lua_next(L, -2) != 0) {
+                    /* Stack is now: -3 AST table; -2 key; -1 value */
+
+                    /*
+                     * Push a copy of the key so we can safely call
+                     * lua_tolstring to get a string key
+                     */
+
+                    const char  *key;
+                    lua_pushvalue(L, -2);
+                    key = lua_tostring(L, -1);
+
+                    /* Stack is now:
+                     * -4 AST table
+                     * -3 key
+                     * -2 value
+                     * -1 copied string key
+                     */
+
+                    avro_value_t  field;
+                    check(avro_value_get_by_name(value, key, &field, NULL));
+                    lua_pushcfunction(L, l_value_set_from_ast);
+                    lua_avro_push_value(L, &field, NO_DESTRUCTOR);
+                    lua_pushvalue(L, -5);
+                    lua_rawget(L, -7);
+                    lua_call(L, 2, 0);
+
+                    /* Pop off value and copied key to continue loop */
+                    lua_pop(L, 2);
+                }
+
+                return 0;
+            }
+
+        case AVRO_UNION:
+            {
+                if (lua_isnil(L, 2)) {
+                    get_union_branch(L, value, "null", false);
+                    return 0;
+                }
+
+                lua_pushnil(L);
+                if (lua_next(L, -2) == 0) {
+                    lua_pushliteral(L, "Union AST must have exactly one element");
+                    return lua_error(L);
+                }
+
+                const char  *branch_name = lua_tostring(L, -2);
+                lua_pushcfunction(L, l_value_set_from_ast);
+                get_union_branch(L, value, branch_name, false);
+                lua_pushvalue(L, -3);
+                lua_call(L, 2, 0);
+
+                return 0;
+            }
+
+        default:
+            lua_pushliteral(L, "Unknown Avro value type");
+            return lua_error(L);
+    }
+}
+
+
+/**
+ * Adds a new element to an Avro map.  The first parameter is always the
+ * key of the new element.  If called with two parameter, then the map
+ * values must be scalars, and the parameter is used as the value of the
+ * new element.  If called with one parameter, then the map can contain
+ * any kind of value.  In both cases, we return the AvroValue for the
+ * new element.
+ */
+
+static int
+l_value_add(lua_State *L)
+{
+    int  nargs = lua_gettop(L);
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    const char  *key = luaL_checkstring(L, 2);
+
+    if (avro_value_get_type(value) != AVRO_MAP) {
+        lua_pushliteral(L, "Can only add to an map");
+        return lua_error(L);
+    }
+
+    if (nargs > 3) {
+        lua_pushliteral(L, "Bad number of arguments to AvroValue:add");
+        return lua_error(L);
+    }
+
+    avro_value_t  element;
+    check(avro_value_add(value, key, &element, NULL, NULL));
+    lua_avro_push_value(L, &element, NO_DESTRUCTOR);
+
+    if (nargs == 3) {
+        /*
+         * If the caller provided a value, then the new element must be
+         * a scalar.
+         */
+
+        return set_scalar_value(L, -1, 3);
+    }
+
+    /*
+     * Otherwise just return the new element value.
+     */
+
+    return 1;
+}
+
+
+/**
  * Appends a new element to an Avro array.  If called with one
  * parameter, then the array must contain scalars, and the parameter is
  * used as the value of the new element.  If called with no parameters,
@@ -1036,7 +1246,7 @@ l_value_encode_raw(lua_State *L)
  */
 
 static int
-l_value_gc(lua_State *L)
+l_value_release(lua_State *L)
 {
     LuaAvroValue  *l_value = luaL_checkudata(L, 1, MT_AVRO_VALUE);
     if (l_value->destructor == GENERIC_DESTRUCTOR &&
@@ -1168,12 +1378,7 @@ l_schema_new(lua_State *L)
     avro_schema_error_t  schema_error;
     avro_schema_t  schema;
 
-    int  rc = avro_schema_from_json(json_str, json_len, &schema, &schema_error);
-    if (rc != 0)
-    {
-        lua_pushliteral(L, "Error parsing JSON schema");
-        return lua_error(L);
-    }
+    check(avro_schema_from_json(json_str, json_len, &schema, &schema_error));
 
     lua_avro_push_schema(L, schema);
     avro_schema_decref(schema);
@@ -1645,6 +1850,7 @@ l_file_open(lua_State *L)
 
 static const luaL_Reg  value_methods[] =
 {
+    {"add", l_value_add},
     {"append", l_value_append},
     {"copy_from", l_value_copy_from},
     {"discriminant", l_value_discriminant},
@@ -1653,9 +1859,13 @@ static const luaL_Reg  value_methods[] =
     {"get", l_value_get},
     {"hash", l_value_hash},
     {"iterate", l_value_iterate},
+    {"release", l_value_release},
+    {"reset", l_value_reset},
     {"scalar", l_value_scalar},
     {"set", l_value_set},
+    {"set_from_ast", l_value_set_from_ast},
     {"set_source", l_value_set_source},
+    {"to_json", l_value_tostring},
     {"type", l_value_type},
     {NULL, NULL}
 };
@@ -1750,8 +1960,6 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_value_newindex);
     lua_setfield(L, -2, "__newindex");
-    lua_pushcfunction(L, l_value_gc);
-    lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
     luaL_newmetatable(L, MT_ITERATOR);

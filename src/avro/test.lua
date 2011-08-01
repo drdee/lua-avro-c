@@ -76,9 +76,15 @@ do
       for _,element in array:iterate() do
          table.insert(actual, element)
       end
+      local array3 = schema:new_value()
+      array3:set_from_ast(expected)
       assert(deepcompare(actual, expected))
       assert(array == array2)
+      assert(array == array3)
       assert(array:hash() == array2:hash())
+      array:release()
+      array2:release()
+      array3:release()
    end
 
    test_array("int", { 1,2,3,4 })
@@ -101,13 +107,101 @@ do
       for key,element in map:iterate() do
          actual[key] = element
       end
+      local map3 = schema:new_value()
+      map3:set_from_ast(expected)
       assert(deepcompare(actual, expected))
       assert(map == map2)
+      assert(map == map3)
       assert(map:hash() == map2:hash())
+      map:release()
+      map2:release()
+      map3:release()
    end
 
    test_map("int", { a=1,b=2,c=3,d=4 })
    test_map("string", { a="", b="a", c="hello", d="world!" })
+end
+
+------------------------------------------------------------------------
+-- Records
+
+do
+   local schema = A.Schema [[
+      {
+         "type": "record",
+         "name": "test",
+         "fields": [
+            { "name": "i", "type": "int" },
+            { "name": "b", "type": "boolean" },
+            { "name": "s", "type": "string" },
+            { "name": "ls", "type": { "type": "array", "items": "long" } }
+         ]
+      }
+   ]]
+
+   local rec = schema:new_value()
+   rec.i = 1
+   rec.b = true
+   rec.s = "fantastic"
+   rec.ls:append(1)
+   rec.ls:append(100)
+
+   local rec2 = schema:new_value()
+   rec2:copy_from(rec)
+
+   local rec3 = schema:new_value()
+   rec3:set_from_ast {
+      i = 1,
+      b = true,
+      s = "fantastic",
+      ls = { 1, 100 },
+   }
+
+   assert(rec == rec2)
+   assert(rec == rec3)
+
+   rec:release()
+   rec2:release()
+   rec3:release()
+end
+
+------------------------------------------------------------------------
+-- Unions
+
+do
+   local schema = A.Schema [[
+      [
+         "null", "int",
+         { "type": "record", "name": "test",
+           "fields": [ {"name": "a", "type": "int" } ] }
+      ]
+   ]]
+
+   local union = schema:new_value()
+   local union2 = schema:new_value()
+   local union3 = schema:new_value()
+
+   union.null = nil
+   union2:copy_from(union)
+   union3:set_from_ast(nil)
+   assert(union == union2)
+   assert(union == union3)
+
+   union.int = 42
+   union2:copy_from(union)
+   union3:set_from_ast { int = 42 }
+   assert(union == union2)
+   assert(union == union3)
+
+   union.test.a = 10
+   union2:copy_from(union)
+   union3:set_from_ast { test = { a = 10 } }
+   assert(union == union2)
+   assert(union == union3)
+
+   union:release()
+   union2:release()
+   union3:release()
 end
 
 ------------------------------------------------------------------------
@@ -125,6 +219,8 @@ do
 
       value:set(scalar)
       assert(resolved:scalar() == scalar)
+      value:release()
+      resolved:release()
    end
 
    test_good_scalar("int", "int", 42)
@@ -169,6 +265,11 @@ do
 
    assert(val1 ~= val2)
    assert(resolved1 == resolved2)
+
+   val1:release()
+   val2:release()
+   resolved1:release()
+   resolved2:release()
 end
 
 ------------------------------------------------------------------------
@@ -238,6 +339,7 @@ do
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
+      actual:release()
    end
 
    test_boolean("\000", false)
@@ -249,6 +351,7 @@ do
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
       assert(actual:scalar() == expected_prim)
+      actual:release()
    end
 
    test_int("\000", 0)
@@ -266,6 +369,7 @@ do
       value:set(prim_value)
       local actual_buf = assert(value:encode())
       assert(actual_buf == expected_buf)
+      value:release()
    end
 
    test_boolean("\000", false)
@@ -278,6 +382,8 @@ do
       value:set(prim_value)
       local actual_buf = assert(value:encode())
       assert(actual_buf == expected_buf)
+      actual:release()
+      value:release()
    end
 
    test_int("\000", 0)
@@ -302,6 +408,7 @@ do
    end
 
    writer:close()
+   value:release()
 
    local reader, actual
 
@@ -312,6 +419,7 @@ do
    value = reader:read()
    while value do
       table.insert(actual, value:scalar())
+      value:release()
       value = reader:read()
    end
    reader:close()
@@ -320,12 +428,13 @@ do
    reader = A.open(filename)
    actual = {}
    value = schema:new_value()
-   value = reader:read(value)
-   while value do
+   local ok = reader:read(value)
+   while ok do
       table.insert(actual, value:scalar())
-      value = reader:read(value)
+      ok = reader:read(value)
    end
    reader:close()
+   value:release()
    assert(deepcompare(expected, actual))
 
    -- And cleanup
