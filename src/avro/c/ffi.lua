@@ -1102,13 +1102,15 @@ function Value_class:copy_from(src)
    if rc ~= 0 then avro_error() end
 end
 
-function Value_mt:__tostring()
+function Value_class:to_json()
    local rc = avro.avro_value_to_json(self, true, v_char_p)
    if rc ~= 0 then avro_error() end
    local result = ffi.string(v_char_p[0])
    ffi.C.free(v_char_p[0])
    return result
 end
+
+Value_mt.__tostring = Value_class.to_json
 
 function Value_mt:__index(idx)
    -- First try Value_class; if there's a function with the given name,

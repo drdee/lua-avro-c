@@ -1865,6 +1865,7 @@ static const luaL_Reg  value_methods[] =
     {"set", l_value_set},
     {"set_from_ast", l_value_set_from_ast},
     {"set_source", l_value_set_source},
+    {"to_json", l_value_tostring},
     {"type", l_value_type},
     {NULL, NULL}
 };
