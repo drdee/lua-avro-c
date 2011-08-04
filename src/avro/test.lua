@@ -82,6 +82,9 @@ do
       assert(array == array2)
       assert(array == array3)
       assert(array:hash() == array2:hash())
+      for i,e in array:iterate(true) do
+         assert(e:scalar() == expected[i])
+      end
       array:release()
       array2:release()
       array3:release()
@@ -113,6 +116,9 @@ do
       assert(map == map2)
       assert(map == map3)
       assert(map:hash() == map2:hash())
+      for k,e in map:iterate(true) do
+         assert(e:scalar() == expected[k])
+      end
       map:release()
       map2:release()
       map3:release()

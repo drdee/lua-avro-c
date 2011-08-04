@@ -211,10 +211,8 @@ local avro_schema_t = ffi.typeof([[avro_schema_t]])
 local LuaAvroSchema
 
 local avro_value_t = ffi.typeof([[avro_value_t]])
+local avro_value_t_ptr = ffi.typeof([[avro_value_t *]])
 local LuaAvroValue
-
---local avro_consumer_t = ffi.typeof([[avro_consumer_t *]])
-local LuaAvroConsumer
 
 local LuaAvroDataInputFile
 local LuaAvroDataOutputFile
@@ -435,6 +433,10 @@ function Schema_class:new_value()
    return value
 end
 
+function Schema_class:raw()
+   return self.schema
+end
+
 function Schema_class:type()
    return self.schema[0].type
 end
@@ -489,6 +491,15 @@ local v_int32 = ffi.new(int32_t_ptr)
 local v_int64 = ffi.new(int64_t_ptr)
 local v_size = ffi.new(size_t_ptr)
 local v_const_void_p = ffi.new(const_void_p_ptr)
+
+function raw_value(v_ud)
+   local ud = ffi.cast(avro_value_t_ptr, v_ud)
+   local self = LuaAvroValue()
+   self.iface = ud.iface
+   self.self = ud.self
+   self.destructor = NO_DESTRUCTOR
+   return self
+end
 
 -- A helper method that returns the Lua equivalent for scalar values.
 local function lua_scalar(value)
@@ -889,7 +900,13 @@ local function iterate_array(state, unused)
    if rc ~= 0 then avro_error() end
    state.next_index = state.next_index + 1
    -- Result should be a 1-based index for Lua
-   return state.next_index, scalar_or_wrapper(element)
+   local element_result
+   if state.no_scalar then
+      element_result = element
+   else
+      element_result = scalar_or_wrapper(element)
+   end
+   return state.next_index, element_result
 end
 
 local function iterate_map(state, unused)
@@ -905,16 +922,23 @@ local function iterate_map(state, unused)
    )
    if rc ~= 0 then avro_error() end
    state.next_index = state.next_index + 1
-   return ffi.string(key[0]), scalar_or_wrapper(element)
+   local element_result
+   if state.no_scalar then
+      element_result = element
+   else
+      element_result = scalar_or_wrapper(element)
+   end
+   return ffi.string(key[0]), element_result
 end
 
-function Value_class:iterate()
+function Value_class:iterate(no_scalar)
    local value_type = self:type()
 
    if value_type == ARRAY then
       local rc = self.iface.get_size(self.iface, self.self, v_size)
       if rc ~= 0 then avro_error() end
       local state = {
+         no_scalar = no_scalar,
          value = self,
          next_index = 0,
          length = v_size[0],
@@ -925,6 +949,7 @@ function Value_class:iterate()
       local rc = self.iface.get_size(self.iface, self.self, v_size)
       if rc ~= 0 then avro_error() end
       local state = {
+         no_scalar = no_scalar,
          value = self,
          next_index = 0,
          length = v_size[0],
