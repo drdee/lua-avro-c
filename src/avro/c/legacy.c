@@ -1039,6 +1039,7 @@ l_value_append(lua_State *L)
 
 typedef struct _Iterator
 {
+    bool  no_scalar;
     avro_value_t  *value;
     size_t  next_index;
 } Iterator;
@@ -1046,10 +1047,11 @@ typedef struct _Iterator
 #define MT_ITERATOR "sawmill:AvroValue:iterator"
 
 static void
-create_iterator(lua_State *L, avro_value_t *value)
+create_iterator(lua_State *L, avro_value_t *value, bool no_scalar)
 {
     lua_newuserdata(L, sizeof(Iterator));
     Iterator  *state = lua_touserdata(L, -1);
+    state->no_scalar = no_scalar;
     state->value = value;
     state->next_index = 0;
     luaL_getmetatable(L, MT_ITERATOR);
@@ -1082,7 +1084,11 @@ iterate_array(lua_State *L)
     avro_value_t  element;
     check(avro_value_get_by_index(state->value, state->next_index, &element, NULL));
     lua_pushinteger(L, state->next_index+1);
-    lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
+    if (state->no_scalar) {
+        lua_avro_push_value(L, &element, NO_DESTRUCTOR);
+    } else {
+        lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
+    }
 
     state->next_index++;
     return 2;
@@ -1108,7 +1114,11 @@ iterate_map(lua_State *L)
     check(avro_value_get_by_index(state->value, state->next_index, &element, &key));
 
     lua_pushstring(L, key);
-    lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
+    if (state->no_scalar) {
+        lua_avro_push_value(L, &element, NO_DESTRUCTOR);
+    } else {
+        lua_avro_push_scalar_or_value(L, &element, false, NO_DESTRUCTOR);
+    }
 
     state->next_index++;
     return 2;
@@ -1119,17 +1129,18 @@ l_value_iterate(lua_State *L)
 {
     avro_value_t  *value = lua_avro_get_value(L, 1);
     avro_type_t  value_type = avro_value_get_type(value);
+    int  no_scalar = lua_toboolean(L, 2);
 
     if (value_type == AVRO_ARRAY) {
         lua_pushcfunction(L, iterate_array);
-        create_iterator(L, value);
+        create_iterator(L, value, no_scalar);
         lua_pushnil(L);
         return 3;
     }
 
     if (value_type == AVRO_MAP) {
         lua_pushcfunction(L, iterate_map);
-        create_iterator(L, value);
+        create_iterator(L, value, no_scalar);
         lua_pushnil(L);
         return 3;
     }
