@@ -428,8 +428,10 @@ function Schema_class:new_raw_value()
    return value
 end
 
-function Schema_class:new_value()
-   return AW.Value(self:new_raw_value())
+function Schema_class:new_wrapped_value()
+   local raw = self:new_raw_value()
+   local wrapped = AW.get_wrapper(raw)
+   return wrapped, raw
 end
 
 function Schema_class:raw()
@@ -501,7 +503,7 @@ function raw_value(v_ud)
 end
 
 function wrapped_value(v_ud)
-   return AW.Value(raw_value(v_ud))
+   return AW.get_wrapper(raw_value(v_ud))
 end
 
 function Value_class:get(index)
@@ -1025,8 +1027,9 @@ function Value_class:hash()
    return avro.avro_value_hash(self)
 end
 
-function Value_class:raw_value()
-   return self
+function Value_class:schema_name()
+   local schema = self.iface.get_schema(self.iface, self.self)
+   return ffi.string(avro.avro_schema_type_name(schema))
 end
 
 function Value_class:reset()
@@ -1101,10 +1104,6 @@ function ResolvedReader_class:new_raw_value()
    return value
 end
 
-function ResolvedReader_class:new_value()
-   return AW.Value(self:new_raw_value())
-end
-
 function ResolvedReader_mt:__gc()
    if self.resolver ~= nil then
       self.resolver.decref(self.resolver)
@@ -1131,7 +1130,7 @@ local memory_reader = avro.avro_reader_memory(nil, 0)
 
 function raw_decode_value(resolver, buf, size, dest)
    avro.avro_reader_memory_set_source(memory_reader, buf, size)
-   avro.avro_resolved_writer_set_dest(resolver.value, dest:raw_value())
+   avro.avro_resolved_writer_set_dest(resolver.value, dest)
    local rc = avro.avro_value_read(memory_reader, resolver.value)
    if rc == 0 then
       return true
@@ -1202,16 +1201,6 @@ function DataInputFile_class:read_raw(value)
    return value
 end
 
-function DataInputFile_class:read(value)
-   if not value then
-      value = self:read_raw()
-      if not value then return value else return AW.Value(value) end
-   else
-      local result = self:read_raw(value.raw)
-      if not result then return result else return value end
-   end
-end
-
 function DataInputFile_class:close()
    if self.reader ~= nil then
       avro.avro_file_reader_close(self.reader)
@@ -1232,8 +1221,8 @@ LuaAvroDataInputFile = ffi.metatype([[LuaAvroDataInputFile]], DataInputFile_mt)
 local DataOutputFile_class = {}
 local DataOutputFile_mt = { __index = DataOutputFile_class }
 
-function DataOutputFile_class:write(value)
-   local rc = avro.avro_file_writer_append_value(self.writer, value:raw_value())
+function DataOutputFile_class:write_raw(value)
+   local rc = avro.avro_file_writer_append_value(self.writer, value)
    if rc ~= 0 then avro_error() end
 end
 

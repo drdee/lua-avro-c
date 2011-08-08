@@ -88,22 +88,6 @@ lua_avro_get_value(lua_State *L, int index)
 }
 
 
-avro_value_t *
-lua_avro_get_raw_value(lua_State *L, int index)
-{
-    avro_value_t  *result;
-    lua_pushvalue(L, index);
-    lua_pushliteral(L, "raw_value");
-    lua_gettable(L, -2);
-    lua_replace(L, -2);
-    lua_pushvalue(L, index);
-    lua_call(L, 1, 1);
-    result = lua_avro_get_value(L, -1);
-    lua_pop(L, 1);
-    return result;
-}
-
-
 static int
 l_value_raw_value(lua_State *L)
 {
@@ -121,6 +105,20 @@ l_value_type(lua_State *L)
 {
     avro_value_t  *value = lua_avro_get_value(L, 1);
     lua_pushnumber(L, avro_value_get_type(value));
+    return 1;
+}
+
+
+/**
+ * Returns the name of the value's schema.
+ */
+
+static int
+l_value_schema_name(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    avro_schema_t  schema = avro_value_get_schema(value);
+    lua_pushstring(L, avro_schema_type_name(schema));
     return 1;
 }
 
@@ -1085,19 +1083,6 @@ l_value_release(lua_State *L)
 }
 
 
-/**
- * Creates a new AvroValue instance from a JSON string.
- */
-
-static int
-l_value_new(lua_State *L)
-{
-    /* TODO */
-    lua_pushnil(L);
-    return 1;
-}
-
-
 /*-----------------------------------------------------------------------
  * Lua access — schemas
  */
@@ -1153,16 +1138,21 @@ l_schema_new_raw_value(lua_State *L)
 }
 
 static int
-l_schema_new_value(lua_State *L)
+l_schema_new_wrapped_value(lua_State *L)
 {
+    l_schema_new_raw_value(L);
+
     lua_getglobal(L, "avro");
     lua_pushliteral(L, "wrapper");
     lua_rawget(L, -2);
-    lua_pushliteral(L, "Value");
+    lua_replace(L, -2);
+    lua_pushliteral(L, "get_wrapper");
     lua_rawget(L, -2);
-    l_schema_new_raw_value(L);
+    lua_replace(L, -2);
+    lua_pushvalue(L, -2);
     lua_call(L, 1, 1);
-    return 1;
+    lua_pushvalue(L, -2);
+    return 2;
 }
 
 
@@ -1328,19 +1318,6 @@ l_resolved_reader_new_raw_value(lua_State *L)
     return 1;
 }
 
-static int
-l_resolved_reader_new_value(lua_State *L)
-{
-    lua_getglobal(L, "avro");
-    lua_pushliteral(L, "wrapper");
-    lua_rawget(L, -2);
-    lua_pushliteral(L, "Value");
-    lua_rawget(L, -2);
-    l_resolved_reader_new_raw_value(L);
-    lua_call(L, 1, 1);
-    return 1;
-}
-
 
 /*-----------------------------------------------------------------------
  * Lua access — resolved writers
@@ -1436,7 +1413,7 @@ l_resolved_writer_decode(lua_State *L)
         luaL_checkudata(L, 1, MT_AVRO_RESOLVED_WRITER);
     size_t  size = 0;
     const char  *buf = luaL_checklstring(L, 2, &size);
-    avro_value_t  *value = lua_avro_get_raw_value(L, 3);
+    avro_value_t  *value = lua_avro_get_value(L, 3);
 
     avro_reader_t  reader = avro_reader_memory(buf, size);
     avro_resolved_writer_set_dest(&l_resolver->value, value);
@@ -1470,7 +1447,7 @@ l_value_decode_raw(lua_State *L)
     }
     void  *buf = lua_touserdata(L, 2);
     size_t  size = luaL_checkinteger(L, 3);
-    avro_value_t  *value = lua_avro_get_raw_value(L, 4);
+    avro_value_t  *value = lua_avro_get_value(L, 4);
 
     avro_reader_t  reader = avro_reader_memory(buf, size);
     avro_resolved_writer_set_dest(&l_resolver->value, value);
@@ -1585,44 +1562,6 @@ l_input_file_read_raw(lua_State *L)
     }
 }
 
-static int
-l_input_file_read(lua_State *L)
-{
-    int  nargs = lua_gettop(L);
-    LuaAvroDataInputFile  *l_file =
-        luaL_checkudata(L, 1, MT_AVRO_DATA_INPUT_FILE);
-
-    if (nargs == 1) {
-        /* No Value instance given, so create one. */
-        avro_value_t  value;
-        check(avro_generic_value_new(l_file->iface, &value));
-        int  rc = avro_file_reader_read_value(l_file->reader, &value);
-        if (rc != 0) {
-            return lua_return_avro_error(L);
-        }
-
-        lua_getglobal(L, "avro");
-        lua_pushliteral(L, "wrapper");
-        lua_rawget(L, -2);
-        lua_pushliteral(L, "Value");
-        lua_rawget(L, -2);
-        lua_avro_push_value(L, &value, GENERIC_DESTRUCTOR);
-        lua_call(L, 1, 1);
-        return 1;
-    }
-
-    else {
-        /* Otherwise read into the given value. */
-        avro_value_t  *value = lua_avro_get_raw_value(L, 2);
-        int  rc = avro_file_reader_read_value(l_file->reader, value);
-        if (rc != 0) {
-            return lua_return_avro_error(L);
-        }
-        lua_pushvalue(L, 2);
-        return 1;
-    }
-}
-
 
 /**
  * The string used to identify the AvroDataOutputFile class's metatable
@@ -1684,8 +1623,7 @@ static int
 l_output_file_write(lua_State *L)
 {
     avro_file_writer_t  writer = lua_avro_get_file_writer(L, 1);
-
-    avro_value_t  *value = lua_avro_get_raw_value(L, 2);
+    avro_value_t  *value = lua_avro_get_value(L, 2);
     check(avro_file_writer_append_value(writer, value));
     return 0;
 }
@@ -1747,6 +1685,7 @@ static const luaL_Reg  value_methods[] =
     {"raw_value", l_value_raw_value},
     {"release", l_value_release},
     {"reset", l_value_reset},
+    {"schema_name", l_value_schema_name},
     {"set", l_value_set},
     {"set_from_ast", l_value_set_from_ast},
     {"set_source", l_value_set_source},
@@ -1759,7 +1698,7 @@ static const luaL_Reg  value_methods[] =
 static const luaL_Reg  schema_methods[] =
 {
     {"new_raw_value", l_schema_new_raw_value},
-    {"new_value", l_schema_new_value},
+    {"new_wrapped_value", l_schema_new_wrapped_value},
     {"type", l_schema_type},
     {NULL, NULL}
 };
@@ -1768,7 +1707,6 @@ static const luaL_Reg  schema_methods[] =
 static const luaL_Reg  resolved_reader_methods[] =
 {
     {"new_raw_value", l_resolved_reader_new_raw_value},
-    {"new_value", l_resolved_reader_new_value},
     {NULL, NULL}
 };
 
@@ -1784,7 +1722,6 @@ static const luaL_Reg  input_file_methods[] =
 {
     {"close", l_input_file_close},
     {"read_raw", l_input_file_read_raw},
-    {"read", l_input_file_read},
     {NULL, NULL}
 };
 
@@ -1792,7 +1729,7 @@ static const luaL_Reg  input_file_methods[] =
 static const luaL_Reg  output_file_methods[] =
 {
     {"close", l_output_file_close},
-    {"write", l_output_file_write},
+    {"write_raw", l_output_file_write},
     {NULL, NULL}
 };
 
@@ -1803,7 +1740,6 @@ static const luaL_Reg  mod_methods[] =
     {"ResolvedReader", l_resolved_reader_new},
     {"ResolvedWriter", l_resolved_writer_new},
     {"Schema", l_schema_new},
-    {"Value", l_value_new},
     {"open", l_file_open},
     {"raw_decode_value", l_value_decode_raw},
     {"raw_encode_value", l_value_encode_raw},

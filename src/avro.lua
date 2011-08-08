@@ -9,6 +9,7 @@
 
 local AC = require "avro.c"
 local ACC = require "avro.constants"
+local AW = require "avro.wrapper"
 
 local pairs = pairs
 local print = print
@@ -39,3 +40,8 @@ raw_decode_value = AC.raw_decode_value
 raw_encode_value = AC.raw_encode_value
 raw_value = AC.raw_value
 wrapped_value = AC.wrapped_value
+
+get_wrapper_class = AW.get_wrapper_class
+set_wrapper_class = AW.set_wrapper_class
+get_wrapper = AW.get_wrapper
+set_wrapper = AW.set_wrapper

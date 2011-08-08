@@ -413,7 +413,7 @@ do
 
    for _,i in ipairs(expected) do
       value:set(i)
-      writer:write(value)
+      writer:write_raw(value)
    end
 
    writer:close()

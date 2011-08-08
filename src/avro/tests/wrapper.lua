@@ -66,24 +66,24 @@ do
    local function test_array(prim_type, expected)
       local items_schema = A.Schema([[{"type": "]]..prim_type..[["}]])
       local schema = A.ArraySchema(items_schema)
-      local array = schema:new_value()
+      local array = schema:new_wrapped_value()
       for _,val in ipairs(expected) do
          array:append(val)
       end
-      local array2 = schema:new_value()
+      local array2 = schema:new_wrapped_value()
       array2:copy_from(array)
       local actual = {}
       for _,element in array:iterate() do
          table.insert(actual, element)
       end
-      local array3 = schema:new_value()
+      local array3 = schema:new_wrapped_value()
       array3:set_from_ast(expected)
       assert(deepcompare(actual, expected))
       assert(array == array2)
       assert(array == array3)
       assert(array:hash() == array2:hash())
       for i,e in array:iterate(true) do
-         assert(e:scalar() == expected[i])
+         assert(e:get() == expected[i])
       end
       array:release()
       array2:release()
@@ -100,24 +100,24 @@ end
 do
    local function test_map(prim_type, expected)
       local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
-      local map = schema:new_value()
+      local map = schema:new_wrapped_value()
       for key,val in pairs(expected) do
          map:set(key, val)
       end
-      local map2 = schema:new_value()
+      local map2 = schema:new_wrapped_value()
       map2:copy_from(map)
       local actual = {}
       for key,element in map:iterate() do
          actual[key] = element
       end
-      local map3 = schema:new_value()
+      local map3 = schema:new_wrapped_value()
       map3:set_from_ast(expected)
       assert(deepcompare(actual, expected))
       assert(map == map2)
       assert(map == map3)
       assert(map:hash() == map2:hash())
       for k,e in map:iterate(true) do
-         assert(e:scalar() == expected[k])
+         assert(e:get() == expected[k])
       end
       map:release()
       map2:release()
@@ -145,17 +145,17 @@ do
       }
    ]]
 
-   local rec = schema:new_value()
+   local rec = schema:new_wrapped_value()
    rec.i = 1
    rec.b = true
    rec.s = "fantastic"
    rec.ls:append(1)
    rec.ls:append(100)
 
-   local rec2 = schema:new_value()
+   local rec2 = schema:new_wrapped_value()
    rec2:copy_from(rec)
 
-   local rec3 = schema:new_value()
+   local rec3 = schema:new_wrapped_value()
    rec3:set_from_ast {
       i = 1,
       b = true,
@@ -183,9 +183,9 @@ do
       ]
    ]]
 
-   local union = schema:new_value()
-   local union2 = schema:new_value()
-   local union3 = schema:new_value()
+   local union = schema:new_wrapped_value()
+   local union2 = schema:new_wrapped_value()
+   local union3 = schema:new_wrapped_value()
 
    union.null = nil
    union2:copy_from(union)
@@ -219,14 +219,15 @@ do
       local schema2 = A.Schema([[{"type": "]]..json2..[["}]])
       local resolver = assert(A.ResolvedReader(schema1, schema2))
 
-      local value = schema1:new_value()
-      local resolved = resolver:new_value()
-      resolved:set_source(value)
+      local raw_value = schema1:new_raw_value()
+      local raw_resolved = resolver:new_raw_value()
+      raw_resolved:set_source(raw_value)
 
-      value:set(scalar)
-      assert(resolved:scalar() == scalar)
-      value:release()
-      resolved:release()
+      raw_value:set(scalar)
+      local wrapped_resolved = A.get_wrapper(raw_resolved)
+      assert(wrapped_resolved == scalar)
+      raw_value:release()
+      raw_resolved:release()
    end
 
    test_good_scalar("int", "int", 42)
@@ -255,25 +256,25 @@ do
 
    local resolver = assert(A.ResolvedReader(schema1, schema2))
 
-   local val1 = schema1:new_value()
+   local val1, raw1 = schema1:new_wrapped_value()
    val1.a = 1
    val1.b = 42
 
-   local val2 = schema1:new_value()
+   local val2, raw2 = schema1:new_wrapped_value()
    val2.a = 1
    val2.b = 100
 
-   local resolved1 = resolver:new_value()
-   resolved1:set_source(val1)
+   local resolved1 = resolver:new_raw_value()
+   resolved1:set_source(raw1)
 
-   local resolved2 = resolver:new_value()
-   resolved2:set_source(val2)
+   local resolved2 = resolver:new_raw_value()
+   resolved2:set_source(raw2)
 
    assert(val1 ~= val2)
    assert(resolved1 == resolved2)
 
-   val1:release()
-   val2:release()
+   raw1:release()
+   raw2:release()
    resolved1:release()
    resolved2:release()
 end
@@ -341,11 +342,12 @@ end
 do
    local function test_boolean(buf, expected_prim)
       local schema = A.Schema([[{"type": "boolean"}]])
-      local actual = schema:new_value()
+      local raw_actual = schema:new_raw_value()
       local resolver = assert(A.ResolvedWriter(schema, schema))
-      assert(resolver:decode(buf, actual))
-      assert(actual:scalar() == expected_prim)
-      actual:release()
+      assert(resolver:decode(buf, raw_actual))
+      local actual = A.get_wrapper(raw_actual)
+      assert(actual == expected_prim)
+      raw_actual:release()
    end
 
    test_boolean("\000", false)
@@ -353,11 +355,12 @@ do
 
    local function test_int(buf, expected_prim)
       local schema = A.Schema([[{"type": "int"}]])
-      local actual = schema:new_value()
+      local raw_actual = schema:new_raw_value()
       local resolver = assert(A.ResolvedWriter(schema, schema))
-      assert(resolver:decode(buf, actual))
-      assert(actual:scalar() == expected_prim)
-      actual:release()
+      assert(resolver:decode(buf, raw_actual))
+      local actual = A.get_wrapper(raw_actual)
+      assert(actual == expected_prim)
+      raw_actual:release()
    end
 
    test_int("\000", 0)
@@ -371,11 +374,11 @@ end
 do
    local function test_boolean(expected_buf, prim_value)
       local schema = A.Schema([[{"type": "boolean"}]])
-      local value = schema:new_value()
-      value:set(prim_value)
-      local actual_buf = assert(value:encode())
+      local raw_value = schema:new_raw_value()
+      A.set_wrapper(raw_value, prim_value)
+      local actual_buf = assert(raw_value:encode())
       assert(actual_buf == expected_buf)
-      value:release()
+      raw_value:release()
    end
 
    test_boolean("\000", false)
@@ -383,13 +386,11 @@ do
 
    local function test_int(expected_buf, prim_value)
       local schema = A.Schema([[{"type": "int"}]])
-      local actual = schema:new_value()
-      local value = schema:new_value()
-      value:set(prim_value)
-      local actual_buf = assert(value:encode())
+      local raw_value = schema:new_raw_value()
+      A.set_wrapper(raw_value, prim_value)
+      local actual_buf = assert(raw_value:encode())
       assert(actual_buf == expected_buf)
-      actual:release()
-      value:release()
+      raw_value:release()
    end
 
    test_int("\000", 0)
@@ -406,15 +407,15 @@ do
    local filename = "test-data.avro"
    local schema = A.Schema([[{"type": "int"}]])
    local writer = A.open(filename, "w", schema)
-   local value = schema:new_value()
+   local raw_value = schema:new_raw_value()
 
    for _,i in ipairs(expected) do
-      value:set(i)
-      writer:write(value)
+      raw_value:set(i)
+      writer:write_raw(raw_value)
    end
 
    writer:close()
-   value:release()
+   raw_value:release()
 
    local reader, actual
 
@@ -422,25 +423,27 @@ do
 
    reader = A.open(filename)
    actual = {}
-   value = reader:read()
-   while value do
-      table.insert(actual, value:scalar())
-      value:release()
-      value = reader:read()
+   raw_value = reader:read_raw()
+   while raw_value do
+      local value = A.get_wrapper(raw_value)
+      table.insert(actual, value)
+      raw_value:release()
+      raw_value = reader:read_raw()
    end
    reader:close()
    assert(deepcompare(expected, actual))
 
    reader = A.open(filename)
    actual = {}
-   value = schema:new_value()
-   local ok = reader:read(value)
+   raw_value = schema:new_raw_value()
+   local ok = reader:read_raw(raw_value)
    while ok do
-      table.insert(actual, value:scalar())
-      ok = reader:read(value)
+      local value = A.get_wrapper(raw_value)
+      table.insert(actual, value)
+      ok = reader:read_raw(raw_value)
    end
    reader:close()
-   value:release()
+   raw_value:release()
    assert(deepcompare(expected, actual))
 
    -- And cleanup

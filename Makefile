@@ -85,7 +85,7 @@ BUILD_O_C := $(patsubst %.c,%.o,$(patsubst src/%,build/%,$(SRC_C)))
 BUILD_SO_C := $(patsubst %.o,%.so,$(BUILD_O_C))
 INSTALLED_C := $(patsubst build/%,$(DESTDIR)$(LUA_LIBDIR)/%,$(BUILD_SO_C))
 
-build-c: $(BUILD_SO_C)
+build-c: $(BUILD_O_C) $(BUILD_SO_C)
 
 build/%.o: src/%.c
 	$(QUIET_CC)$(CC) -I$(LUA_INCDIR) -o $@ $(CFLAGS) -c $(AVRO_CFLAGS) $<

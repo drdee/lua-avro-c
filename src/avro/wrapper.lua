@@ -9,6 +9,7 @@
 
 local ACC = require "avro.constants"
 
+local getmetatable = getmetatable
 local error = error
 local ipairs = ipairs
 local print = print
@@ -18,26 +19,42 @@ local type = type
 
 module "avro.wrapper"
 
--- A helpful wrapper API that lets you access Avro values using the Lua
--- table syntax
+-- This module provides a framework for creating wrapper classes around
+-- the raw Avro values returned by the avro.c module.  We provide a
+-- couple of default wrapper classes.  For compound values (arrays,
+-- maps, records, and unions), the default wrapper implements a nice
+-- table-like syntax for accessing the child values.  For scalar values,
+-- the default wrapper is a Lua scalar that has the same value as the
+-- underlying Avro value.  Together, this lets you access the contents
+-- of a value (named "value), whose schema is
+--
+--   record test
+--     long  ages[];
+--   end
+--
+-- as "value.ages[2]", and have the result be a Lua number.
+--
+-- In addition to these default wrappers, you can install your own
+-- wrapper classes.  A wrapper is defined by a table containing two
+-- functions:
+--
+--   get(raw_value)
+--     Return a wrapper instance for the given raw value.
+--
+--   set(raw_value, value)
+--     Set the contents of the given raw value.  This should work when
+--     "value" is a wrapped value instance or an arbitrary Lua value.
+--
+-- Each wrapper class is associated with a named Avro schema.  This
+-- means that there can only be a single wrapper class for any of the
+-- non-named types (boolean, bytes, double, float, int, long, null,
+-- string, array, map, and union).  If you need to provide a custom
+-- wrapper class for one of these types, you must wrap it in a named
+-- record.
 
-local Value_class = {}
-local Value_mt = {}
 
-function Value(raw_value)
-   if not raw_value then error "What?" end
-   local obj = { raw = raw_value }
-   setmetatable(obj, Value_mt)
-   return obj
-end
-
-function Value_class:raw_value()
-   return self.raw
-end
-
-function Value_class:type()
-   return self.raw:type()
-end
+------------------------------------------------------------------------
+-- Wrapper dispatch table
 
 local scalar_types_array = {
    ACC.BOOLEAN, ACC.BYTES, ACC.DOUBLE, ACC.FLOAT, ACC.INT,
@@ -46,150 +63,197 @@ local scalar_types_array = {
 local scalar_types = {}
 for _,v in ipairs(scalar_types_array) do scalar_types[v] = true end
 
-function Value_class:scalar()
-   if scalar_types[self.raw:type()] then
-      return self.raw:get()
-   else
-      error "Value isn't a scalar"
-   end
-end
+-- These will be filled in below
+local CompoundValue = {}
+local ScalarValue = {}
 
-function Value_class:get(index)
-   if scalar_types[self.raw:type()] then
-      error "Value is a scalar"
-   else
-      local child = self.raw:get(index)
-      if scalar_types[child:type()] then
-         return child:get()
+local WRAPPERS = {}
+
+function get_wrapper_class(raw_value)
+   local wrapper = WRAPPERS[raw_value:schema_name()]
+
+   if not wrapper then
+      if scalar_types[raw_value:type()] then
+         wrapper = ScalarValue
       else
-         return Value(child)
+         wrapper = CompoundValue
       end
    end
+
+   return wrapper
 end
 
-local function set_scalar(raw, val)
-   if scalar_types[raw:type()] then
-      raw:set(val)
+function set_wrapper_class(schema_name, wrapper)
+   WRAPPERS[schema_name] = wrapper
+end
+
+function get_wrapper(raw_value)
+   return get_wrapper_class(raw_value).get(raw_value)
+end
+
+function set_wrapper(raw_value, value)
+   return get_wrapper_class(raw_value).set(raw_value, value)
+end
+
+
+------------------------------------------------------------------------
+-- Default compound value wrapper
+
+local CompoundValue_class = {}
+local CompoundValue_mt = {}
+
+function CompoundValue.get(raw_value)
+   local obj = { raw = raw_value }
+   setmetatable(obj, CompoundValue_mt)
+   return obj
+end
+
+function CompoundValue.set(raw_value, val)
+   if getmetatable(val) == CompoundValue_mt then
+      if val.raw ~= raw_value then
+         raw_value:copy_from(val.raw)
+      end
    else
-      error "Value isn't a scalar"
+      raw_value:set_from_ast(val)
    end
 end
 
-function Value_class:set(arg1, arg2)
-   if arg2 then
-      local child, err = self.raw:set(arg1)
-      if not child then return child, err end
-      set_scalar(child, arg2)
-   else
-      set_scalar(self.raw, arg1)
-   end
+function CompoundValue_class:type()
+   return self.raw:type()
 end
 
-function Value_class:append(val)
+function CompoundValue_class:get_(index)
+   return self.raw:get(index)
+end
+
+function CompoundValue_class:get(index)
+   local child = self.raw:get(index)
+   return get_wrapper(child)
+end
+
+function CompoundValue_class:set_(index)
+   return self.raw:set(index)
+end
+
+function CompoundValue_class:set(index, val)
+   local child, err = self.raw:set(index)
+   if not child then return child, err end
+   set_wrapper(child, val)
+end
+
+function CompoundValue_class:append_(val)
+   return self.raw:append()
+end
+
+function CompoundValue_class:append(val)
    local child = self.raw:append()
    if val then
-      set_scalar(child, val)
+      return set_wrapper(child, val)
+   else
+      return get_wrapper(child)
    end
-   return Value(child)
 end
 
-function Value_class:add(key, val)
+function CompoundValue_class:add_(key)
+   return self.raw:add(key)
+end
+
+function CompoundValue_class:add(key, val)
    local child = self.raw:add(key)
    if val then
-      set_scalar(child, val)
+      return set_wrapper(child, val)
+   else
+      return get_wrapper(child)
    end
-   return Value(child)
 end
 
-function Value_class:discriminant()
+function CompoundValue_class:discriminant()
    return self.raw:discriminant()
-end
-
-function Value_class:encode()
-   return self.raw:encode()
-end
-
-function Value_class:encoded_size()
-   return self.raw:encoded_size()
 end
 
 local function iterate_wrapped(state, unused)
    local k,v = state.f(state.s, state.var)
    if not k then return k,v end
    state.var = k
-   if not state.no_scalar and scalar_types[v:type()] then
-      return k, v:get()
+   return k, get_wrapper(v)
+end
+
+function CompoundValue_class:iterate(want_raw)
+   if want_raw then
+      return self.raw:iterate()
    else
-      return k, Value(v)
+      local f, s, var = self.raw:iterate()
+      local state = { f=f, s=s, var=var }
+      return iterate_wrapped, state, nil
    end
 end
 
-function Value_class:iterate(no_scalar)
-   local f, s, var = self.raw:iterate()
-   local state = { f=f, s=s, var=var, no_scalar=no_scalar }
-   return iterate_wrapped, state, nil
-end
-
-function Value_class:set_from_ast(ast)
+function CompoundValue_class:set_from_ast(ast)
    return self.raw:set_from_ast(ast)
 end
 
-function Value_class:hash()
+function CompoundValue_class:hash()
    return self.raw:hash()
 end
 
-function Value_class:reset()
+function CompoundValue_class:reset()
    return self.raw:reset()
 end
 
-function Value_class:copy_from(other)
-   return self.raw:copy_from(other.raw)
-end
-
-function Value_class:set_source(src)
-   return self.raw:set_source(src.raw)
-end
-
-function Value_class:to_json()
-   return self.raw:to_json()
-end
-
-Value_mt.__tostring = Value_class.to_json
-
-function Value_mt:__eq(other)
-   return self.raw == other.raw
-end
-
-function Value_class:release()
+function CompoundValue_class:release()
    return self.raw:release()
 end
 
-function Value_mt:__index(idx)
-   -- First try Value_class; if there's a function with the given name,
-   -- then that's our result.
-   if rawget(self, idx) then return rawget(self,idx) end
+function CompoundValue_class:copy_from(other)
+   return self.raw:copy_from(other.raw)
+end
 
-   local result = Value_class[idx]
+function CompoundValue_class:to_json()
+   return self.raw:to_json()
+end
+
+CompoundValue_mt.__tostring = CompoundValue_class.to_json
+
+function CompoundValue_mt:__eq(other)
+   return self.raw == other.raw
+end
+
+function CompoundValue_mt:__index(idx)
+   -- First try CompoundValue_class; if there's a function with the given name,
+   -- then that's our result.
+   local result = CompoundValue_class[idx]
    if result then return result end
 
    -- Otherwise defer to the get() method.
-   return Value_class.get(self, idx)
+   return CompoundValue_class.get(self, idx)
 end
 
-function Value_mt:__newindex(idx, val)
-   -- First try Value_class; if there's a function with the given name,
+function CompoundValue_mt:__newindex(idx, val)
+   -- First try CompoundValue_class; if there's a function with the given name,
    -- then you need to use the set() method directly.  (We don't want
    -- the caller to overwrite any methods.)
-   local result = Value_class[idx]
+   local result = CompoundValue_class[idx]
    if result then error("Cannot set field with [] syntax") end
 
    -- Otherwise mimic the set() method.
    local value_type = self.raw:type()
    if value_type == ACC.MAP then
       local child = self.raw:add(idx)
-      child:set(val)
+      set_wrapper(child, val)
    else
       local child = self.raw:get(idx)
-      child:set(val)
+      set_wrapper(child, val)
    end
+end
+
+
+------------------------------------------------------------------------
+-- Default scalar value wrapper
+
+function ScalarValue.get(raw_value)
+   return raw_value:get()
+end
+
+function ScalarValue.set(raw_value, val)
+   raw_value:set(val)
 end
