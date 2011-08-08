@@ -1144,15 +1144,15 @@ function ResolvedWriter_class:decode(buf, dest)
 end
 
 function ResolvedWriter_mt:__gc()
-   if self.resolver ~= nil then
-      self.resolver.decref(self.resolver)
-      self.resolver = nil
-   end
-
    if self.value.self ~= nil then
       avro.avro_resolved_writer_free_value(self.value)
       self.value.iface = nil
       self.value.self = nil
+   end
+
+   if self.resolver ~= nil then
+      self.resolver.decref(self.resolver)
+      self.resolver = nil
    end
 end
 
