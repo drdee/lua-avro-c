@@ -63,13 +63,12 @@ end
 
 -- Note that the avro_value_t definition below does not exactly match
 -- the one from the Avro C library.  We need to store an additional
--- field, indicating which destructor should be used to free the value
--- in its release() method.  Ideally, we'd use a wrapper struct like
--- this:
+-- field, indicating whether the value should be decref-ed in its
+-- release() method.  Ideally, we'd use a wrapper struct like this:
 --
 -- typedef struct LuaAvroValue {
 --     avro_value_t  value;
---     int  destructor;
+--     bool  should_decref;
 -- } LuaAvroValue;
 --
 -- Unfortunately, the LuaJIT compiler doesn't currently support
@@ -81,25 +80,23 @@ end
 -- own definition of avro_value_t.  The beginning of the struct still
 -- matches what the library expects, so we should be okay.
 
-local NO_DESTRUCTOR = 0
-local GENERIC_DESTRUCTOR = 1
-local RESOLVED_READER_DESTRUCTOR = 2
-
 ffi.cdef [[
 typedef struct avro_value_iface  avro_value_iface_t;
 
 typedef struct avro_value {
-	const avro_value_iface_t  *iface;
-	void  *self;
-        int  destructor;
+    avro_value_iface_t  *iface;
+    void  *self;
+    bool  should_decref;
 } avro_value_t;
 
 typedef avro_obj_t  *avro_schema_t;
 typedef struct avro_wrapped_buffer  avro_wrapped_buffer_t;
 
 struct avro_value_iface {
-	avro_value_iface_t *(*incref)(avro_value_iface_t *iface);
-	void (*decref)(avro_value_iface_t *iface);
+	avro_value_iface_t *(*incref_iface)(avro_value_iface_t *iface);
+	void (*decref_iface)(avro_value_iface_t *iface);
+	void (*incref)(avro_value_t *value);
+	void (*decref)(avro_value_t *value);
 	int (*reset)(const avro_value_iface_t *iface, void *self);
 	avro_type_t (*get_type)(const avro_value_iface_t *iface, const void *self);
 	avro_schema_t (*get_schema)(const avro_value_iface_t *iface, const void *self);
@@ -273,10 +270,7 @@ avro_value_iface_t *
 avro_generic_class_from_schema(avro_schema_t schema);
 
 int
-avro_generic_value_new(const avro_value_iface_t *iface, avro_value_t *dest);
-
-void
-avro_generic_value_free(avro_value_t *self);
+avro_generic_value_new(avro_value_iface_t *iface, avro_value_t *dest);
 ]]
 
 -- avro/io.h
@@ -343,9 +337,6 @@ avro_resolved_reader_new_value(const avro_value_iface_t *iface,
                                avro_value_t *value);
 
 void
-avro_resolved_reader_free_value(avro_value_t *self);
-
-void
 avro_resolved_reader_set_source(avro_value_t *self, avro_value_t *src);
 
 avro_value_iface_t *
@@ -354,9 +345,6 @@ avro_resolved_writer_new(avro_schema_t wschema, avro_schema_t rschema);
 int
 avro_resolved_writer_new_value(const avro_value_iface_t *iface,
                                avro_value_t *value);
-
-void
-avro_resolved_writer_free_value(avro_value_t *self);
 
 void
 avro_resolved_writer_set_dest(avro_value_t *self, avro_value_t *dest);
@@ -401,6 +389,18 @@ avro_schema_union_branch_by_name(avro_schema_t schema, int *branch_index,
 -- avro/value.h
 
 ffi.cdef [[
+void
+avro_value_incref(avro_value_t *value);
+
+void
+avro_value_decref(avro_value_t *value);
+
+void
+avro_value_copy_ref(avro_value_t *dest, const avro_value_t *src);
+
+void
+avro_value_move_ref(avro_value_t *dest, avro_value_t *src);
+
 int
 avro_value_copy(avro_value_t *dest, avro_value_t *src);
 
@@ -424,7 +424,7 @@ function Schema_class:new_raw_value()
    local value = LuaAvroValue()
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
-   value.destructor = GENERIC_DESTRUCTOR
+   value.should_decref = true
    return value
 end
 
@@ -448,8 +448,8 @@ function Schema_mt:__gc()
       self.schema = nil
    end
    if self.iface ~= nil then
-      if self.iface.decref ~= nil then
-         self.iface.decref(self.iface)
+      if self.iface.decref_iface ~= nil then
+         self.iface.decref_iface(self.iface)
       end
       self.iface = nil
    end
@@ -493,17 +493,17 @@ local v_int64 = ffi.new(int64_t_ptr)
 local v_size = ffi.new(size_t_ptr)
 local v_const_void_p = ffi.new(const_void_p_ptr)
 
-function raw_value(v_ud)
+function raw_value(v_ud, should_decref)
    local ud = ffi.cast(avro_value_t_ptr, v_ud)
    local self = LuaAvroValue()
    self.iface = ud.iface
    self.self = ud.self
-   self.destructor = NO_DESTRUCTOR
+   self.should_decref = should_decref or false
    return self
 end
 
-function wrapped_value(v_ud)
-   return AW.get_wrapper(raw_value(v_ud))
+function wrapped_value(v_ud, should_decref)
+   return AW.get_wrapper(raw_value(v_ud, should_decref))
 end
 
 function Value_class:get(index)
@@ -595,7 +595,7 @@ function Value_class:get(index)
             error "Index out of bounds"
          end
          local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
+         element.should_decref = false
          rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
          if rc ~= 0 then avro_error() end
          return element
@@ -606,7 +606,7 @@ function Value_class:get(index)
    elseif value_type == MAP then
       if type(index) == "string" then
          local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
+         element.should_decref = false
          local rc = self.iface.get_by_name(self.iface, self.self, index, element, v_size_t)
          if rc ~= 0 then return get_avro_error() end
          if element.self == nil then
@@ -617,7 +617,7 @@ function Value_class:get(index)
 
       elseif type(index) == "number" then
          local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
+         element.should_decref = false
          local rc = self.iface.get_by_index(self.iface, self.self, index,
                                             element, v_const_char_p)
          if rc ~= 0 then return get_avro_error() end
@@ -629,14 +629,14 @@ function Value_class:get(index)
    elseif value_type == RECORD then
       if type(index) == "string" then
          local field = LuaAvroValue()
-         field.destructor = NO_DESTRUCTOR
+         field.should_decref = false
          local rc = self.iface.get_by_name(self.iface, self.self, index, field, nil)
          if rc ~= 0 then return get_avro_error() end
          return field
 
       elseif type(index) == "number" then
          local field = LuaAvroValue()
-         field.destructor = NO_DESTRUCTOR
+         field.should_decref = false
          local rc = self.iface.get_by_index(self.iface, self.self, index, field, nil)
          if rc ~= 0 then return get_avro_error() end
          return field
@@ -664,7 +664,7 @@ function Value_class:get(index)
 
       elseif type(index) == "nil" then
          local branch = LuaAvroValue()
-         branch.destructor = NO_DESTRUCTOR
+         branch.should_decref = false
          local rc = self.iface.get_current_branch(self.iface, self.self, branch)
          if rc ~= 0 then return get_avro_error() end
          return branch
@@ -766,7 +766,7 @@ function Value_class:set(val)
    elseif value_type == MAP then
       if type(val) == "string" then
          local element = LuaAvroValue()
-         element.destructor = NO_DESTRUCTOR
+         element.should_decref = false
          local rc = self.iface.add(self.iface, self.self, val, element, nil, nil)
          if rc ~= 0 then return get_avro_error() end
          return element
@@ -1041,9 +1041,6 @@ function Value_class:reset()
 end
 
 function Value_class:set_source(src)
-   if self.destructor ~= RESOLVED_READER_DESTRUCTOR then
-      error "Can only call set_source on a resolved reader value"
-   end
    avro.avro_resolved_reader_set_source(self, src)
 end
 
@@ -1068,21 +1065,19 @@ function Value_mt:__eq(other)
 end
 
 function Value_class:release()
-   if self.destructor == GENERIC_DESTRUCTOR and self.self ~= nil then
-      avro.avro_generic_value_free(self)
-   elseif self.destructor == RESOLVED_READER_DESTRUCTOR and self.self ~= nil then
-      avro.avro_resolved_reader_free_value(self)
+   if self.should_decref and self.self ~= nil then
+      avro.avro_value_decref(self)
    end
    self.iface = nil
    self.self = nil
-   self.destructor = NO_DESTRUCTOR
+   self.should_decref = false
 end
 
 --[==[
 -- UNCOMMENT THIS TO CHECK release() calls
 function Value_mt:__gc()
-   if self.self and self.destructor ~= NO_DESTRUCTOR then
-      print("Warning: Freeing non-released value ", self.self, self.destructor)
+   if self.self and self.should_decref then
+      print("Warning: Freeing non-released value ", self.self)
       self:release()
    end
 end
@@ -1100,13 +1095,13 @@ function ResolvedReader_class:new_raw_value()
    local value = LuaAvroValue()
    local rc = avro.avro_resolved_reader_new_value(self.resolver, value)
    if rc ~= 0 then avro_error() end
-   value.destructor = RESOLVED_READER_DESTRUCTOR
+   value.should_decref = true
    return value
 end
 
 function ResolvedReader_mt:__gc()
    if self.resolver ~= nil then
-      self.resolver.decref(self.resolver)
+      self.resolver.decref_iface(self.resolver)
       self.resolver = nil
    end
 end
@@ -1145,13 +1140,13 @@ end
 
 function ResolvedWriter_mt:__gc()
    if self.value.self ~= nil then
-      avro.avro_resolved_writer_free_value(self.value)
+      avro.avro_value_decref(self.value)
       self.value.iface = nil
       self.value.self = nil
    end
 
    if self.resolver ~= nil then
-      self.resolver.decref(self.resolver)
+      self.resolver.decref_iface(self.resolver)
       self.resolver = nil
    end
 end
@@ -1186,7 +1181,7 @@ function DataInputFile_class:read_raw(value)
       value = LuaAvroValue()
       local rc = avro.avro_generic_value_new(self.iface, value)
       if rc ~= 0 then avro_error() end
-      value.destructor = GENERIC_DESTRUCTOR
+      value.should_decref = true
 
       local rc = avro.avro_file_reader_read_value(self.reader, value)
       if rc ~= 0 then
@@ -1208,8 +1203,8 @@ function DataInputFile_class:close()
    end
    self.wschema = nil
    if self.iface ~= nil then
-      if self.iface.decref ~= nil then
-         self.iface.decref(self.iface)
+      if self.iface.decref_iface ~= nil then
+         self.iface.decref_iface(self.iface)
       end
       self.iface = nil
    end
