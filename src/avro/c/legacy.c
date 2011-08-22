@@ -210,6 +210,21 @@ l_value_set_source(lua_State *L)
 
 
 /**
+ * Sets the destination of a resolved writer value.
+ */
+
+static int
+l_value_set_dest(lua_State *L)
+{
+    LuaAvroValue  *l_value1 = luaL_checkudata(L, 1, MT_AVRO_VALUE);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+
+    avro_resolved_writer_set_dest(&l_value1->value, value2);
+    return 0;
+}
+
+
+/**
  * Resets a value.
  */
 
@@ -1389,6 +1404,21 @@ l_resolved_writer_gc(lua_State *L)
 
 
 /**
+ * Creates a new AvroValue for the given resolved writer.
+ */
+
+static int
+l_resolved_writer_new_raw_value(lua_State *L)
+{
+    avro_value_iface_t  *resolver = lua_avro_get_resolved_writer(L, 1);
+    avro_value_t  value;
+    check(avro_resolved_writer_new_value(resolver, &value));
+    lua_avro_push_value(L, &value, true);
+    return 1;
+}
+
+
+/**
  * Decode an Avro value using the given resolver.
  */
 
@@ -1511,6 +1541,19 @@ l_input_file_close(lua_State *L)
         l_file->iface = NULL;
     }
     return 0;
+}
+
+/**
+ * Returns the writer schema used to create the file.
+ */
+
+static int
+l_input_file_schema(lua_State *L)
+{
+    LuaAvroDataInputFile  *l_file =
+        luaL_checkudata(L, 1, MT_AVRO_DATA_INPUT_FILE);
+    lua_avro_push_schema(L, l_file->wschema);
+    return 1;
 }
 
 /**
@@ -1673,6 +1716,7 @@ static const luaL_Reg  value_methods[] =
     {"reset", l_value_reset},
     {"schema_name", l_value_schema_name},
     {"set", l_value_set},
+    {"set_dest", l_value_set_dest},
     {"set_from_ast", l_value_set_from_ast},
     {"set_source", l_value_set_source},
     {"to_json", l_value_tostring},
@@ -1700,6 +1744,7 @@ static const luaL_Reg  resolved_reader_methods[] =
 static const luaL_Reg  resolved_writer_methods[] =
 {
     {"decode", l_resolved_writer_decode},
+    {"new_raw_value", l_resolved_writer_new_raw_value},
     {NULL, NULL}
 };
 
@@ -1708,6 +1753,7 @@ static const luaL_Reg  input_file_methods[] =
 {
     {"close", l_input_file_close},
     {"read_raw", l_input_file_read_raw},
+    {"schema", l_input_file_schema},
     {NULL, NULL}
 };
 
