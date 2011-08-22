@@ -373,6 +373,9 @@ avro_schema_from_json(const char *json_str, const int32_t json_len,
                       avro_schema_t *schema, avro_schema_error_t *err);
 
 avro_schema_t
+avro_schema_incref(avro_schema_t schema);
+
+avro_schema_t
 avro_schema_map_values(avro_schema_t schema);
 
 const char *
@@ -1044,6 +1047,10 @@ function Value_class:set_source(src)
    avro.avro_resolved_reader_set_source(self, src)
 end
 
+function Value_class:set_dest(src)
+   avro.avro_resolved_writer_set_dest(self, src)
+end
+
 function Value_class:copy_from(src)
    local rc = avro.avro_value_copy(self, src)
    if rc ~= 0 then avro_error() end
@@ -1123,6 +1130,14 @@ local ResolvedWriter_mt = { __index = ResolvedWriter_class }
 
 local memory_reader = avro.avro_reader_memory(nil, 0)
 
+function ResolvedWriter_class:new_raw_value()
+   local value = LuaAvroValue()
+   local rc = avro.avro_resolved_writer_new_value(self.resolver, value)
+   if rc ~= 0 then avro_error() end
+   value.should_decref = true
+   return value
+end
+
 function raw_decode_value(resolver, buf, size, dest)
    avro.avro_reader_memory_set_source(memory_reader, buf, size)
    avro.avro_resolved_writer_set_dest(resolver.value, dest)
@@ -1174,6 +1189,10 @@ local function new_input_file(reader)
    l_reader.wschema = avro.avro_file_reader_get_writer_schema(reader)
    l_reader.iface = avro.avro_generic_class_from_schema(l_reader.wschema)
    return l_reader
+end
+
+function DataInputFile_class:schema()
+   return new_schema(avro.avro_schema_incref(self.wschema))
 end
 
 function DataInputFile_class:read_raw(value)
