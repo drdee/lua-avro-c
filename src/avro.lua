@@ -35,6 +35,7 @@ end
 ArraySchema = AC.ArraySchema
 EnumSchema = AC.EnumSchema
 FixedSchema = AC.FixedSchema
+LinkSchema = AC.LinkSchema
 MapSchema = AC.MapSchema
 RecordSchema = AC.RecordSchema
 ResolvedReader = AC.ResolvedReader
@@ -64,6 +65,7 @@ _M.string = AS.string  -- need the _M b/c we import Lua's string above
 array = AS.array
 enum = AS.enum
 fixed = AS.fixed
+link = AS.link
 map = AS.map
 record = AS.record
 union = AS.union

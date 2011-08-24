@@ -1452,6 +1452,24 @@ l_schema_new_union(lua_State *L)
 }
 
 
+/**
+ * Creates a new link schema.
+ */
+
+static int
+l_schema_new_link(lua_State *L)
+{
+    avro_schema_t  target_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema = avro_schema_link(target_schema);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
 /*-----------------------------------------------------------------------
  * Lua access — resolved readers
  */
@@ -1998,6 +2016,7 @@ static const luaL_Reg  mod_methods[] =
     {"ArraySchema", l_schema_new_array},
     {"EnumSchema", l_schema_new_enum},
     {"FixedSchema", l_schema_new_fixed},
+    {"LinkSchema", l_schema_new_link},
     {"MapSchema", l_schema_new_map},
     {"RecordSchema", l_schema_new_record},
     {"ResolvedReader", l_resolved_reader_new},

@@ -406,6 +406,9 @@ avro_schema_t
 avro_schema_int(void);
 
 avro_schema_t
+avro_schema_link(const avro_schema_t target);
+
+avro_schema_t
 avro_schema_long(void);
 
 avro_schema_t
@@ -637,6 +640,14 @@ function Schema_class:append_branch(branch_schema)
    local rc =
       avro.avro_schema_union_append(self.schema, branch_schema.schema)
    if rc ~= 0 then avro_error() end
+end
+
+-- Links
+
+function LinkSchema(target)
+   local schema = avro.avro_schema_link(target.schema)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
 end
 
 ------------------------------------------------------------------------

@@ -70,7 +70,10 @@ do
                      {"name": "s", "type": "string"}
                   ]
                }
-            }
+            },
+            {"name": "children", "type":
+               { "type": "array", "items": "test" }},
+            {"name": "parent", "type": ["null", "test"]}
          ]
       }
    ]]
@@ -88,6 +91,8 @@ do
       {sub = A.record "subtest" {
          s = A.string,
       }},
+      {children = A.array { A.link "test" }},
+      {parent = A.union { A.null, A.link "test" }},
    }
 
    --print(schema1)
