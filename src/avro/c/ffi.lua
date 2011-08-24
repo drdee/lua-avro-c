@@ -390,6 +390,9 @@ int
 avro_schema_equal(avro_schema_t a, avro_schema_t b);
 
 avro_schema_t
+avro_schema_fixed(const char *name, int64_t size);
+
+avro_schema_t
 avro_schema_float(void);
 
 int
@@ -583,6 +586,14 @@ function Schema_class:append_symbol(name)
    local rc =
       avro.avro_schema_enum_symbol_append(self.schema, name)
    if rc ~= 0 then avro_error() end
+end
+
+-- Fixeds
+
+function FixedSchema(name, size)
+   local schema = avro.avro_schema_fixed(name, size)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
 end
 
 -- Maps

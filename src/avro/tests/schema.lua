@@ -57,6 +57,10 @@ do
                { "type": "array", "items": "double" }},
             {"name": "m", "type":
                { "type": "map", "values": "float" }},
+            {"name": "ipv4", "type":
+               { "type": "fixed", "name": "ipv4", "size": 4 }},
+            {"name": "ipv6", "type":
+               { "type": "fixed", "name": "ipv6", "size": 16 }},
             {"name": "sub", "type":
                {
                   "type": "record",
@@ -77,6 +81,8 @@ do
       {e = A.enum "color" {"RED","GREEN","BLUE"} },
       {a = A.array { A.double }},
       {m = A.map(A.float)},
+      {ipv4 = A.fixed "ipv4" {size=4}},
+      {ipv6 = A.fixed "ipv6"(16)},
       {sub = A.record "subtest" {
          s = A.string,
       }},

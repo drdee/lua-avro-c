@@ -12,6 +12,7 @@ local AC = require "avro.c"
 local ipairs = ipairs
 local next = next
 local pairs = pairs
+local tonumber = tonumber
 local type = type
 
 module "avro.schema"
@@ -62,7 +63,7 @@ end
 ------------------------------------------------------------------------
 -- Enums
 --
---   local schema = enum "color { "RED", "GREEN", "BLUE" }
+--   local schema = enum "color" { "RED", "GREEN", "BLUE" }
 
 function enum(name)
    return function (symbols)
@@ -71,6 +72,24 @@ function enum(name)
          schema:append_symbol(symbol_name)
       end
       return schema
+   end
+end
+
+------------------------------------------------------------------------
+-- Fixeds
+--
+--   local schema = fixed "ipv4" { size=4 }
+--   local schema = fixed "ipv4"(4)
+
+function fixed(name)
+   return function (args)
+      local size
+      if type(args) == "table" then
+         size = args.size
+      else
+         size = tonumber(args)
+      end
+      return AC.FixedSchema(name, size)
    end
 end
 
