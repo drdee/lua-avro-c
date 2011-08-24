@@ -1171,6 +1171,20 @@ l_schema_type(lua_State *L)
 
 
 /**
+ * Appends a branch to a union schema.
+ */
+
+static int
+l_schema_append_branch(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  branch_schema = lua_avro_get_schema(L, 2);
+    check(avro_schema_union_append(schema, branch_schema));
+    return 0;
+}
+
+
+/**
  * Appends a field to a record schema.
  */
 
@@ -1412,6 +1426,23 @@ l_schema_new_record(lua_State *L)
 {
     const char  *name = luaL_checkstring(L, 1);
     avro_schema_t  schema = avro_schema_record(name, NULL);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new union schema.
+ */
+
+static int
+l_schema_new_union(lua_State *L)
+{
+    avro_schema_t  schema = avro_schema_union();
     if (schema == NULL) {
         return lua_avro_error(L);
     }
@@ -1919,6 +1950,7 @@ static const luaL_Reg  value_methods[] =
 
 static const luaL_Reg  schema_methods[] =
 {
+    {"append_branch", l_schema_append_branch},
     {"append_field", l_schema_append_field},
     {"append_symbol", l_schema_append_symbol},
     {"new_raw_value", l_schema_new_raw_value},
@@ -1971,6 +2003,7 @@ static const luaL_Reg  mod_methods[] =
     {"ResolvedReader", l_resolved_reader_new},
     {"ResolvedWriter", l_resolved_writer_new},
     {"Schema", l_schema_new},
+    {"UnionSchema", l_schema_new_union},
     {"open", l_file_open},
     {"raw_decode_value", l_value_decode_raw},
     {"raw_encode_value", l_value_encode_raw},

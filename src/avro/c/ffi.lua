@@ -431,6 +431,12 @@ const char *
 avro_schema_type_name(const avro_schema_t schema);
 
 avro_schema_t
+avro_schema_union(void);
+
+int
+avro_schema_union_append(avro_schema_t schema, avro_schema_t branch);
+
+avro_schema_t
 avro_schema_union_branch(avro_schema_t schema, int discriminant);
 
 avro_schema_t
@@ -616,6 +622,20 @@ function Schema_class:append_field(name, field_schema)
    local rc =
       avro.avro_schema_record_field_append(self.schema, name,
                                            field_schema.schema)
+   if rc ~= 0 then avro_error() end
+end
+
+-- Unions
+
+function UnionSchema(items)
+   local schema = avro.avro_schema_union()
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:append_branch(branch_schema)
+   local rc =
+      avro.avro_schema_union_append(self.schema, branch_schema.schema)
    if rc ~= 0 then avro_error() end
 end
 

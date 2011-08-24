@@ -61,6 +61,7 @@ do
                { "type": "fixed", "name": "ipv4", "size": 4 }},
             {"name": "ipv6", "type":
                { "type": "fixed", "name": "ipv6", "size": 16 }},
+            {"name": "u", "type": ["null", "string", "double"]},
             {"name": "sub", "type":
                {
                   "type": "record",
@@ -83,6 +84,7 @@ do
       {m = A.map(A.float)},
       {ipv4 = A.fixed "ipv4" {size=4}},
       {ipv6 = A.fixed "ipv6"(16)},
+      {u = A.union {A.null, A.string, A.double}},
       {sub = A.record "subtest" {
          s = A.string,
       }},

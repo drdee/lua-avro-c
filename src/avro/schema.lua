@@ -141,3 +141,17 @@ function record(name)
       return schema
    end
 end
+
+------------------------------------------------------------------------
+-- Unions
+--
+--   local schema = union { branch_schemas }
+
+function union(branches)
+   local schema = AC.UnionSchema()
+   for _, branch_schema_spec in ipairs(branches) do
+      local branch_schema = AC.Schema(branch_schema_spec)
+      schema:append_branch(branch_schema)
+   end
+   return schema
+end
