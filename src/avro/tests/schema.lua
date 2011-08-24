@@ -36,7 +36,7 @@ do
 end
 
 ------------------------------------------------------------------------
--- Record constructor
+-- Helper constructors
 
 do
    local json = [[
@@ -46,6 +46,13 @@ do
          "fields": [
             {"name": "i", "type": "int"},
             {"name": "l", "type": "long"},
+            {"name": "e", "type":
+               {
+                  "type": "enum",
+                  "name": "color",
+                  "symbols": ["RED","GREEN","BLUE"]
+               }
+            },
             {"name": "sub", "type":
                {
                   "type": "record",
@@ -63,6 +70,7 @@ do
    local schema2 = A.record "test" {
       {i = "int"},
       {l = [[ {"type": "long"} ]]},
+      {e = A.enum "color" {"RED","GREEN","BLUE"} },
       {sub = A.record "subtest" {
          s = A.string,
       }},

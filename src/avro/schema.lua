@@ -25,10 +25,31 @@ long = AC.Schema "long"
 null = AC.Schema "null"
 string = AC.Schema "string"
 
--- Creates a new Avro record schema with the given name.  The result of
--- this function is another function, which you pass a Lua table to
--- describing the fields of the record.  So the overall syntax is
--- something like:
+-- The constructors for enum, fixed, and record schemas all take in a
+-- name, followed by a Lua table describing the contents of the type.
+-- We do this by only taking in the name in this function, which returns
+-- a function that takes in the Lua table.  This gives us an overall
+-- syntax that doesn't require parentheses:
+--
+--   local schema = enum "color" { "RED", "GREEN", "BLUE" }
+
+------------------------------------------------------------------------
+-- Enums
+--
+--   local schema = enum "color { "RED", "GREEN", "BLUE" }
+
+function enum(name)
+   return function (symbols)
+      local schema = AC.EnumSchema(name)
+      for _, symbol_name in ipairs(symbols) do
+         schema:append_symbol(symbol_name)
+      end
+      return schema
+   end
+end
+
+------------------------------------------------------------------------
+-- Records
 --
 --   local schema = record "packet" {
 --      timestamp = record "timestamp" {

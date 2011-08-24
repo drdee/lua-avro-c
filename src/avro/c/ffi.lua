@@ -374,11 +374,17 @@ avro_schema_decref(avro_schema_t schema);
 avro_schema_t
 avro_schema_double(void);
 
+avro_schema_t
+avro_schema_enum(const char *name);
+
 const char *
 avro_schema_enum_get(const avro_schema_t schema, int index);
 
 int
 avro_schema_enum_get_by_name(const avro_schema_t schema, const char *name);
+
+int
+avro_schema_enum_symbol_append(avro_schema_t schema, const char *symbol);
 
 int
 avro_schema_equal(avro_schema_t a, avro_schema_t b);
@@ -560,6 +566,20 @@ function ArraySchema(items)
    local schema = avro.avro_schema_array(items.schema)
    if schema == nil then avro_error() end
    return new_schema(schema)
+end
+
+-- Enums
+
+function EnumSchema(name)
+   local schema = avro.avro_schema_enum(name)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:append_symbol(name)
+   local rc =
+      avro.avro_schema_enum_symbol_append(self.schema, name)
+   if rc ~= 0 then avro_error() end
 end
 
 -- Records
