@@ -308,6 +308,9 @@ void
 avro_reader_free(avro_reader_t reader);
 
 int
+avro_schema_to_json(const avro_schema_t schema, avro_writer_t out);
+
+int
 avro_value_read(avro_reader_t reader, avro_value_t *dest);
 
 int
@@ -377,6 +380,9 @@ avro_schema_enum_get(const avro_schema_t schema, int index);
 int
 avro_schema_enum_get_by_name(const avro_schema_t schema, const char *name);
 
+int
+avro_schema_equal(avro_schema_t a, avro_schema_t b);
+
 avro_schema_t
 avro_schema_float(void);
 
@@ -441,6 +447,10 @@ int
 avro_value_to_json(const avro_value_t *value, int one_line, char **str);
 ]]
 
+local static_buf = ffi.new([[ char[65536] ]])
+local static_size = 65536
+local memory_writer = avro.avro_writer_memory(nil, 0)
+
 ------------------------------------------------------------------------
 -- Schemas
 
@@ -467,6 +477,19 @@ end
 
 function Schema_class:type()
    return self.schema[0].type
+end
+
+function Schema_class:to_json()
+   avro.avro_writer_memory_set_dest(memory_writer, static_buf, static_size)
+   local rc = avro.avro_schema_to_json(self.schema, memory_writer)
+   if rc ~= 0 then avro_error() end
+   return ffi.string(static_buf)
+end
+
+Schema_mt.__tostring = Schema_class.to_json
+
+function Schema_mt:__eq(other)
+   return avro.avro_schema_equal(self.schema, other.schema)
 end
 
 function Schema_mt:__gc()
@@ -904,10 +927,6 @@ function Value_class:discriminant()
    local branch = avro.avro_schema_union_branch(union_schema, v_int[0])
    return ffi.string(avro.avro_schema_type_name(branch))
 end
-
-local static_buf = ffi.new([[ char[65536] ]])
-local static_size = 65536
-local memory_writer = avro.avro_writer_memory(nil, 0)
 
 function Value_class:encode()
    local size = self:encoded_size()

@@ -1191,6 +1191,44 @@ l_schema_gc(lua_State *L)
 
 
 /**
+ * Compares two schemas for equality.
+ */
+
+static int
+l_schema_eq(lua_State *L)
+{
+    avro_schema_t  schema1 = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema2 = lua_avro_get_schema(L, 2);
+    lua_pushboolean(L, avro_schema_equal(schema1, schema2));
+    return 1;
+}
+
+
+/**
+ * Returns the JSON encoding of a schema
+ */
+
+static int
+l_schema_tostring(lua_State *L)
+{
+    static char  static_buf[65536];
+
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    avro_writer_t  writer = avro_writer_memory(static_buf, sizeof(static_buf));
+    int  rc = avro_schema_to_json(schema, writer);
+    int64_t  length = avro_writer_tell(writer);
+    avro_writer_free(writer);
+
+    if (rc != 0) {
+        return lua_avro_error(L);
+    }
+
+    lua_pushlstring(L, static_buf, length);
+    return 1;
+}
+
+
+/**
  * Creates a new AvroSchema instance from a JSON schema string.
  */
 
@@ -1781,6 +1819,7 @@ static const luaL_Reg  schema_methods[] =
 {
     {"new_raw_value", l_schema_new_raw_value},
     {"new_wrapped_value", l_schema_new_wrapped_value},
+    {"to_json", l_schema_tostring},
     {"type", l_schema_type},
     {NULL, NULL}
 };
@@ -1845,6 +1884,10 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_schema_gc);
     lua_setfield(L, -2, "__gc");
+    lua_pushcfunction(L, l_schema_eq);
+    lua_setfield(L, -2, "__eq");
+    lua_pushcfunction(L, l_schema_tostring);
+    lua_setfield(L, -2, "__tostring");
     lua_pop(L, 1);
 
     /* AvroValue metatable */
