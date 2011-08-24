@@ -359,14 +359,26 @@ avro_schema_array(const avro_schema_t items);
 avro_schema_t
 avro_schema_array_items(avro_schema_t schema);
 
+avro_schema_t
+avro_schema_boolean(void);
+
+avro_schema_t
+avro_schema_bytes(void);
+
 void
 avro_schema_decref(avro_schema_t schema);
+
+avro_schema_t
+avro_schema_double(void);
 
 const char *
 avro_schema_enum_get(const avro_schema_t schema, int index);
 
 int
 avro_schema_enum_get_by_name(const avro_schema_t schema, const char *name);
+
+avro_schema_t
+avro_schema_float(void);
 
 int
 avro_schema_from_json(const char *json_str, const int32_t json_len,
@@ -376,7 +388,19 @@ avro_schema_t
 avro_schema_incref(avro_schema_t schema);
 
 avro_schema_t
+avro_schema_int(void);
+
+avro_schema_t
+avro_schema_long(void);
+
+avro_schema_t
 avro_schema_map_values(avro_schema_t schema);
+
+avro_schema_t
+avro_schema_null(void);
+
+avro_schema_t
+avro_schema_string(void);
 
 const char *
 avro_schema_type_name(const avro_schema_t schema);
@@ -464,13 +488,41 @@ local function new_schema(schema)
 end
 
 function Schema(json)
-   local json_len = #json
-   local schema = ffi.new(avro_schema_t_ptr)
-   local schema_error = ffi.new(avro_schema_error_t_ptr)
-   local rc = avro.avro_schema_from_json(json, json_len, schema, schema_error)
-   if rc ~= 0 then avro_error() end
-   return new_schema(schema[0])
+   if type(json) == "string" then
+      local schema
+
+      if json == "boolean" then
+         schema = avro.avro_schema_boolean()
+      elseif json == "bytes" then
+         schema = avro.avro_schema_bytes()
+      elseif json == "double" then
+         schema = avro.avro_schema_double()
+      elseif json == "float" then
+         schema = avro.avro_schema_float()
+      elseif json == "int" then
+         schema = avro.avro_schema_int()
+      elseif json == "long" then
+         schema = avro.avro_schema_long()
+      elseif json == "null" then
+         schema = avro.avro_schema_null()
+      elseif json == "string" then
+         schema = avro.avro_schema_string()
+      else
+         local json_len = #json
+         local schema_p = ffi.new(avro_schema_t_ptr)
+         local schema_error = ffi.new(avro_schema_error_t_ptr)
+         local rc = avro.avro_schema_from_json(json, json_len, schema_p, schema_error)
+         if rc ~= 0 then avro_error() end
+         schema = schema_p[0]
+      end
+
+      return new_schema(schema)
+   elseif ffi.istype(LuaAvroSchema, json) then
+      return json
+   end
 end
+
+LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 
 function ArraySchema(items)
    local schema = avro.avro_schema_array(items.schema)
@@ -478,7 +530,6 @@ function ArraySchema(items)
    return new_schema(schema)
 end
 
-LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 
 ------------------------------------------------------------------------
 -- Values

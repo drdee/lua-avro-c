@@ -7,6 +7,17 @@
 -- details.
 ------------------------------------------------------------------------
 
-require "avro.tests.schema"
-require "avro.tests.raw"
-require "avro.tests.wrapper"
+local AC = require "avro.c"
+
+local pairs = pairs
+
+module "avro.schema"
+
+boolean = AC.Schema "boolean"
+bytes = AC.Schema "bytes"
+double = AC.Schema "double"
+float = AC.Schema "float"
+int = AC.Schema "int"
+long = AC.Schema "long"
+null = AC.Schema "null"
+string = AC.Schema "string"

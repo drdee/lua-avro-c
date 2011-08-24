@@ -1197,17 +1197,69 @@ l_schema_gc(lua_State *L)
 static int
 l_schema_new(lua_State *L)
 {
-    size_t  json_len;
-    const char  *json_str = luaL_checklstring(L, 1, &json_len);
+    if (lua_isstring(L, 1)) {
+        size_t  json_len;
+        const char  *json_str = lua_tolstring(L, 1, &json_len);
+        avro_schema_t  schema;
 
-    avro_schema_error_t  schema_error;
-    avro_schema_t  schema;
+        /* First check for the primitive types */
+        if (strcmp(json_str, "boolean") == 0) {
+            schema = avro_schema_boolean();
+        }
 
-    check(avro_schema_from_json(json_str, json_len, &schema, &schema_error));
+        else if (strcmp(json_str, "bytes") == 0) {
+            schema = avro_schema_bytes();
+        }
 
-    lua_avro_push_schema(L, schema);
-    avro_schema_decref(schema);
-    return 1;
+        else if (strcmp(json_str, "double") == 0) {
+            schema = avro_schema_double();
+        }
+
+        else if (strcmp(json_str, "float") == 0) {
+            schema = avro_schema_float();
+        }
+
+        else if (strcmp(json_str, "int") == 0) {
+            schema = avro_schema_int();
+        }
+
+        else if (strcmp(json_str, "long") == 0) {
+            schema = avro_schema_long();
+        }
+
+        else if (strcmp(json_str, "null") == 0) {
+            schema = avro_schema_null();
+        }
+
+        else if (strcmp(json_str, "string") == 0) {
+            schema = avro_schema_string();
+        }
+
+        /* Otherwise assume it's JSON */
+
+        else {
+            avro_schema_error_t  schema_error;
+            check(avro_schema_from_json(json_str, json_len, &schema, &schema_error));
+        }
+
+        lua_avro_push_schema(L, schema);
+        avro_schema_decref(schema);
+        return 1;
+    }
+
+    if (lua_isuserdata(L, 1)) {
+        if (lua_getmetatable(L, 1)) {
+            lua_getfield(L, LUA_REGISTRYINDEX, MT_AVRO_SCHEMA);
+            if (lua_rawequal(L, -1, -2)) {
+                /* This is already a schema object, so just return it. */
+                lua_pop(L, 2);  /* remove both metatables */
+                return 1;
+            }
+        }
+    }
+
+    lua_pushliteral(L, "Invalid input to Schema function");
+    return lua_error(L);
 }
 
 
