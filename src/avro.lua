@@ -9,6 +9,7 @@
 
 local AC = require "avro.c"
 local ACC = require "avro.constants"
+local AS = require "avro.schema"
 local AW = require "avro.wrapper"
 
 local pairs = pairs
@@ -29,12 +30,18 @@ end
 
 
 ------------------------------------------------------------------------
--- Copy a bunch of public functions from the C module.
+-- Copy a bunch of public functions from the submodules.
 
 ArraySchema = AC.ArraySchema
+EnumSchema = AC.EnumSchema
+FixedSchema = AC.FixedSchema
+LinkSchema = AC.LinkSchema
+MapSchema = AC.MapSchema
+RecordSchema = AC.RecordSchema
 ResolvedReader = AC.ResolvedReader
 ResolvedWriter = AC.ResolvedWriter
 Schema = AC.Schema
+UnionSchema = AC.UnionSchema
 open = AC.open
 raw_decode_value = AC.raw_decode_value
 raw_encode_value = AC.raw_encode_value
@@ -45,3 +52,20 @@ get_wrapper_class = AW.get_wrapper_class
 set_wrapper_class = AW.set_wrapper_class
 get_wrapper = AW.get_wrapper
 set_wrapper = AW.set_wrapper
+
+boolean = AS.boolean
+bytes = AS.bytes
+double = AS.double
+float = AS.float
+int = AS.int
+long = AS.long
+null = AS.null
+_M.string = AS.string  -- need the _M b/c we import Lua's string above
+
+array = AS.array
+enum = AS.enum
+fixed = AS.fixed
+link = AS.link
+map = AS.map
+record = AS.record
+union = AS.union

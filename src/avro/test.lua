@@ -7,5 +7,6 @@
 -- details.
 ------------------------------------------------------------------------
 
+require "avro.tests.schema"
 require "avro.tests.raw"
 require "avro.tests.wrapper"
