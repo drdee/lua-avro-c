@@ -34,6 +34,32 @@ string = AC.Schema "string"
 --   local schema = enum "color" { "RED", "GREEN", "BLUE" }
 
 ------------------------------------------------------------------------
+-- Arrays and maps
+--
+--   local schema = array { item_schema }
+--   local schema = array(item_schema)
+
+function array(args)
+   local item_schema_spec
+   if type(args) == "table" then
+      _, item_schema_spec = next(args)
+   else
+      item_schema_spec = args
+   end
+   return AC.ArraySchema(AC.Schema(item_schema_spec))
+end
+
+function map(args)
+   local value_schema_spec
+   if type(args) == "table" then
+      _, value_schema_spec = next(args)
+   else
+      value_schema_spec = args
+   end
+   return AC.MapSchema(AC.Schema(value_schema_spec))
+end
+
+------------------------------------------------------------------------
 -- Enums
 --
 --   local schema = enum "color { "RED", "GREEN", "BLUE" }

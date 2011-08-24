@@ -406,6 +406,9 @@ avro_schema_t
 avro_schema_long(void);
 
 avro_schema_t
+avro_schema_map(const avro_schema_t values);
+
+avro_schema_t
 avro_schema_map_values(avro_schema_t schema);
 
 avro_schema_t
@@ -580,6 +583,14 @@ function Schema_class:append_symbol(name)
    local rc =
       avro.avro_schema_enum_symbol_append(self.schema, name)
    if rc ~= 0 then avro_error() end
+end
+
+-- Maps
+
+function MapSchema(values)
+   local schema = avro.avro_schema_map(values.schema)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
 end
 
 -- Records

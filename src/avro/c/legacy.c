@@ -1367,6 +1367,24 @@ l_schema_new_enum(lua_State *L)
 
 
 /**
+ * Creates a new map schema.
+ */
+
+static int
+l_schema_new_map(lua_State *L)
+{
+    avro_schema_t  values_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema = avro_schema_map(values_schema);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
  * Creates a new record schema.
  */
 
@@ -1928,6 +1946,7 @@ static const luaL_Reg  mod_methods[] =
 {
     {"ArraySchema", l_schema_new_array},
     {"EnumSchema", l_schema_new_enum},
+    {"MapSchema", l_schema_new_map},
     {"RecordSchema", l_schema_new_record},
     {"ResolvedReader", l_resolved_reader_new},
     {"ResolvedWriter", l_resolved_writer_new},

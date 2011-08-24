@@ -34,6 +34,7 @@ end
 
 ArraySchema = AC.ArraySchema
 EnumSchema = AC.EnumSchema
+MapSchema = AC.MapSchema
 RecordSchema = AC.RecordSchema
 ResolvedReader = AC.ResolvedReader
 ResolvedWriter = AC.ResolvedWriter
@@ -58,5 +59,7 @@ long = AS.long
 null = AS.null
 _M.string = AS.string  -- need the _M b/c we import Lua's string above
 
+array = AS.array
 enum = AS.enum
+map = AS.map
 record = AS.record

@@ -53,6 +53,10 @@ do
                   "symbols": ["RED","GREEN","BLUE"]
                }
             },
+            {"name": "a", "type":
+               { "type": "array", "items": "double" }},
+            {"name": "m", "type":
+               { "type": "map", "values": "float" }},
             {"name": "sub", "type":
                {
                   "type": "record",
@@ -71,6 +75,8 @@ do
       {i = "int"},
       {l = [[ {"type": "long"} ]]},
       {e = A.enum "color" {"RED","GREEN","BLUE"} },
+      {a = A.array { A.double }},
+      {m = A.map(A.float)},
       {sub = A.record "subtest" {
          s = A.string,
       }},
