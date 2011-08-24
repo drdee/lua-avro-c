@@ -1171,6 +1171,21 @@ l_schema_type(lua_State *L)
 
 
 /**
+ * Appends a field to a record schema.
+ */
+
+static int
+l_schema_append_field(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    const char  *field_name = luaL_checkstring(L, 2);
+    avro_schema_t  field_schema = lua_avro_get_schema(L, 3);
+    check(avro_schema_record_field_append(schema, field_name, field_schema));
+    return 0;
+}
+
+
+/**
  * Finalizes an AvroSchema instance.
  */
 
@@ -1302,7 +1317,7 @@ l_schema_new(lua_State *L)
 
 
 /**
- * Creates a new array schema from the given items schema.
+ * Creates a new array schema.
  */
 
 static int
@@ -1310,6 +1325,24 @@ l_schema_new_array(lua_State *L)
 {
     avro_schema_t  items_schema = lua_avro_get_schema(L, 1);
     avro_schema_t  schema = avro_schema_array(items_schema);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new record schema.
+ */
+
+static int
+l_schema_new_record(lua_State *L)
+{
+    const char  *name = luaL_checkstring(L, 1);
+    avro_schema_t  schema = avro_schema_record(name, NULL);
     if (schema == NULL) {
         return lua_avro_error(L);
     }
@@ -1817,6 +1850,7 @@ static const luaL_Reg  value_methods[] =
 
 static const luaL_Reg  schema_methods[] =
 {
+    {"append_field", l_schema_append_field},
     {"new_raw_value", l_schema_new_raw_value},
     {"new_wrapped_value", l_schema_new_wrapped_value},
     {"to_json", l_schema_tostring},
@@ -1860,6 +1894,7 @@ static const luaL_Reg  output_file_methods[] =
 static const luaL_Reg  mod_methods[] =
 {
     {"ArraySchema", l_schema_new_array},
+    {"RecordSchema", l_schema_new_record},
     {"ResolvedReader", l_resolved_reader_new},
     {"ResolvedWriter", l_resolved_writer_new},
     {"Schema", l_schema_new},

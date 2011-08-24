@@ -33,6 +33,7 @@ end
 -- Copy a bunch of public functions from the submodules.
 
 ArraySchema = AC.ArraySchema
+RecordSchema = AC.RecordSchema
 ResolvedReader = AC.ResolvedReader
 ResolvedWriter = AC.ResolvedWriter
 Schema = AC.Schema
@@ -55,3 +56,4 @@ int = AS.int
 long = AS.long
 null = AS.null
 _M.string = AS.string  -- need the _M b/c we import Lua's string above
+record = AS.record

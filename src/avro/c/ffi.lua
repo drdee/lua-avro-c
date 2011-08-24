@@ -406,6 +406,13 @@ avro_schema_t
 avro_schema_null(void);
 
 avro_schema_t
+avro_schema_record(const char *name, const char *namespace);
+
+int
+avro_schema_record_field_append(avro_schema_t rec_schema, const char *name,
+                                avro_schema_t field_schema);
+
+avro_schema_t
 avro_schema_string(void);
 
 const char *
@@ -547,12 +554,28 @@ end
 
 LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 
+-- Arrays
+
 function ArraySchema(items)
    local schema = avro.avro_schema_array(items.schema)
    if schema == nil then avro_error() end
    return new_schema(schema)
 end
 
+-- Records
+
+function RecordSchema(name)
+   local schema = avro.avro_schema_record(name, nil)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:append_field(name, field_schema)
+   local rc =
+      avro.avro_schema_record_field_append(self.schema, name,
+                                           field_schema.schema)
+   if rc ~= 0 then avro_error() end
+end
 
 ------------------------------------------------------------------------
 -- Values

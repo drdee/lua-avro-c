@@ -34,3 +34,41 @@ do
    test_prim("null", A.NULL)
    test_prim("string", A.STRING)
 end
+
+------------------------------------------------------------------------
+-- Record constructor
+
+do
+   local json = [[
+      {
+         "type": "record",
+         "name": "test",
+         "fields": [
+            {"name": "i", "type": "int"},
+            {"name": "l", "type": "long"},
+            {"name": "sub", "type":
+               {
+                  "type": "record",
+                  "name": "subtest",
+                  "fields": [
+                     {"name": "s", "type": "string"}
+                  ]
+               }
+            }
+         ]
+      }
+   ]]
+
+   local schema1 = A.Schema(json)
+   local schema2 = A.record "test" {
+      {i = "int"},
+      {l = [[ {"type": "long"} ]]},
+      {sub = A.record "subtest" {
+         s = A.string,
+      }},
+   }
+
+   --print(schema1)
+   --print(schema2)
+   assert(schema1 == schema2)
+end
