@@ -19,6 +19,44 @@ local type = type
 
 module "avro.schema"
 
+------------------------------------------------------------------------
+-- Various helper functions
+
+function clone(schema)
+   -- This isn't the most efficient, but we clone a schema via the JSON
+   -- encoding.
+   return AC.Schema(schema:to_json())
+end
+
+-- Adds additional fields to a record schema.  This updates the schema
+-- that you pass in; if you need to retain an unmodified copy of the
+-- original, call add_fields() instead.
+
+function add_fields_in_place(schema, fields)
+   for _, field_table in ipairs(fields) do
+      local field_name, field_schema_spec = next(field_table)
+      local field_schema = AC.Schema(field_schema_spec)
+      schema:append_field(field_name, field_schema)
+   end
+   for field_name, field_schema_spec in pairs(fields) do
+      if type(field_name) == "string" then
+         local field_schema = AC.Schema(field_schema_spec)
+         schema:append_field(field_name, field_schema)
+      end
+   end
+end
+
+function add_fields(schema, fields)
+   local new_schema = clone(schema)
+   add_fields_in_place(new_schema, fields)
+   return new_schema
+end
+
+--
+
+------------------------------------------------------------------------
+-- Pre-constructed primitive types
+
 boolean = AC.Schema "boolean"
 bytes = AC.Schema "bytes"
 double = AC.Schema "double"
@@ -28,6 +66,9 @@ long = AC.Schema "long"
 null = AC.Schema "null"
 string = AC.Schema "string"
 
+------------------------------------------------------------------------
+-- Helper constructors for compound types
+
 -- The constructors for enum, fixed, and record schemas all take in a
 -- name, followed by a Lua table describing the contents of the type.
 -- We do this by only taking in the name in this function, which returns
@@ -36,7 +77,6 @@ string = AC.Schema "string"
 --
 --   local schema = enum "color" { "RED", "GREEN", "BLUE" }
 
-------------------------------------------------------------------------
 -- Links
 --
 --   local schema = link "schema_name"
@@ -77,7 +117,6 @@ function link(name)
    end
 end
 
-------------------------------------------------------------------------
 -- Arrays and maps
 --
 --   local schema = array { item_schema }
@@ -109,7 +148,6 @@ function map(args)
    return AC.MapSchema(AC.Schema(value_schema_spec))
 end
 
-------------------------------------------------------------------------
 -- Enums
 --
 --   local schema = enum "color" { "RED", "GREEN", "BLUE" }
@@ -128,7 +166,6 @@ function enum(name)
    end
 end
 
-------------------------------------------------------------------------
 -- Fixeds
 --
 --   local schema = fixed "ipv4" { size=4 }
@@ -151,7 +188,6 @@ function fixed(name)
    end
 end
 
-------------------------------------------------------------------------
 -- Records
 --
 --   local schema = record "packet" {
@@ -188,23 +224,12 @@ function record(name)
    local schema = AC.RecordSchema(name)
    save_link(name, schema)
    return function (fields)
-      for _, field_table in ipairs(fields) do
-         local field_name, field_schema_spec = next(field_table)
-         local field_schema = AC.Schema(field_schema_spec)
-         schema:append_field(field_name, field_schema)
-      end
-      for field_name, field_schema_spec in pairs(fields) do
-         if type(field_name) == "string" then
-            local field_schema = AC.Schema(field_schema_spec)
-            schema:append_field(field_name, field_schema)
-         end
-      end
+      add_fields_in_place(schema, fields)
       done_links()
       return schema
    end
 end
 
-------------------------------------------------------------------------
 -- Unions
 --
 --   local schema = union { branch_schemas }
