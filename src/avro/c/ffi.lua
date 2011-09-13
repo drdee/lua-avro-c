@@ -327,6 +327,9 @@ avro_writer_memory_set_dest(avro_writer_t r, const char *buf, int64_t len);
 
 void
 avro_writer_free(avro_writer_t writer);
+
+int64_t
+avro_writer_tell(avro_writer_t writer);
 ]]
 
 -- avro/resolver.h
@@ -511,7 +514,8 @@ function Schema_class:to_json()
    avro.avro_writer_memory_set_dest(memory_writer, static_buf, static_size)
    local rc = avro.avro_schema_to_json(self.schema, memory_writer)
    if rc ~= 0 then avro_error() end
-   return ffi.string(static_buf)
+   local length = avro.avro_writer_tell(memory_writer)
+   return ffi.string(static_buf, length)
 end
 
 Schema_mt.__tostring = Schema_class.to_json
