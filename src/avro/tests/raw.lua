@@ -425,3 +425,18 @@ do
    -- And cleanup
    os.remove(filename)
 end
+
+------------------------------------------------------------------------
+-- Recursive
+
+do
+   local schema = A.record "list" {
+      {head = A.long},
+      {tail = A.union {A.null, A.link "list"}},
+   }
+
+   local raw_value = schema:new_raw_value()
+   raw_value:get("head"):set(0)
+   raw_value:get("tail"):set("list"):get("head"):set(1)
+   raw_value:get("tail"):get():get("tail"):set("null")
+end

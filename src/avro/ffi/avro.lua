@@ -489,6 +489,10 @@ local Schema_class = {}
 local Schema_mt = { __index = Schema_class }
 
 function Schema_class:new_raw_value()
+   if self.iface == nil then
+      self.iface = avro.avro_generic_class_from_schema(self.schema)
+      if self.iface == nil then avro_error() end
+   end
    local value = LuaAvroValue()
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
@@ -538,8 +542,7 @@ function Schema_mt:__gc()
 end
 
 local function new_schema(schema)
-   local iface = avro.avro_generic_class_from_schema(schema)
-   return LuaAvroSchema(schema, iface)
+   return LuaAvroSchema(schema, nil)
 end
 
 function Schema(json)

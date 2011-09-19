@@ -1109,7 +1109,7 @@ lua_avro_push_schema(lua_State *L, avro_schema_t schema)
 
     l_schema = lua_newuserdata(L, sizeof(LuaAvroSchema));
     l_schema->schema = avro_schema_incref(schema);
-    l_schema->iface = avro_generic_class_from_schema(schema);
+    l_schema->iface = NULL;
     luaL_getmetatable(L, MT_AVRO_SCHEMA);
     lua_setmetatable(L, -2);
     return 1;
@@ -1132,6 +1132,13 @@ static int
 l_schema_new_raw_value(lua_State *L)
 {
     LuaAvroSchema  *l_schema = luaL_checkudata(L, 1, MT_AVRO_SCHEMA);
+    if (l_schema->iface == NULL) {
+        l_schema->iface = avro_generic_class_from_schema(l_schema->schema);
+        if (l_schema->iface == NULL) {
+            lua_pushstring(L, avro_strerror());
+            return lua_error(L);
+        }
+    }
     avro_value_t  value;
     check(avro_generic_value_new(l_schema->iface, &value));
     lua_avro_push_value(L, &value, true);
