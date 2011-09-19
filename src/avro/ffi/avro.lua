@@ -28,7 +28,7 @@ local string = string
 local tostring = tostring
 local type = type
 
-module "avro.c.ffi"
+module "avro.ffi.avro"
 
 local avro = ffi.load("avro")
 

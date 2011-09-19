@@ -30,13 +30,13 @@ build = {
       ["avro.schema"] = "src/avro/schema.lua",
       ["avro.wrapper"] = "src/avro/wrapper.lua",
       ["avro.c"] = "src/avro/c.lua",
-      ["avro.c.legacy"] = {
-         sources = {"src/avro/c/legacy.c"},
+      ["avro.legacy.avro"] = {
+         sources = {"src/avro/legacy/avro.c"},
          libraries = {"avro"},
          incdirs = {"$(AVRO_INCDIR)"},
          libdirs = {"$(AVRO_LIBDIR)"},
       },
-      ["avro.c.ffi"] = "src/avro/c/ffi.lua",
+      ["avro.ffi.avro"] = "src/avro/ffi/avro.lua",
       ["avro.test"] = "src/avro/test.lua",
       ["avro.tests.raw"] = "src/avro/tests/raw.lua",
       ["avro.tests.schema"] = "src/avro/tests/schema.lua",
