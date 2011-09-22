@@ -98,4 +98,5 @@ do
    --print(schema1)
    --print(schema2)
    assert(schema1 == schema2)
+   assert(schema1:size() == 11)
 end

@@ -386,6 +386,9 @@ avro_schema_enum_get(const avro_schema_t schema, int index);
 int
 avro_schema_enum_get_by_name(const avro_schema_t schema, const char *name);
 
+size_t
+avro_schema_enum_size(const avro_schema_t schema);
+
 int
 avro_schema_enum_symbol_append(avro_schema_t schema, const char *symbol);
 
@@ -394,6 +397,9 @@ avro_schema_equal(avro_schema_t a, avro_schema_t b);
 
 avro_schema_t
 avro_schema_fixed(const char *name, int64_t size);
+
+size_t
+avro_schema_fixed_size(const avro_schema_t schema);
 
 avro_schema_t
 avro_schema_float(void);
@@ -429,6 +435,9 @@ avro_schema_record(const char *name, const char *namespace);
 int
 avro_schema_record_field_append(avro_schema_t rec_schema, const char *name,
                                 avro_schema_t field_schema);
+
+size_t
+avro_schema_record_size(const avro_schema_t schema);
 
 avro_schema_t
 avro_schema_string(void);
@@ -512,6 +521,19 @@ end
 
 function Schema_class:type()
    return self.schema[0].type
+end
+
+function Schema_class:size()
+   local schema_type = self:type()
+   if schema_type == FIXED then
+      return avro.avro_schema_fixed_size(self.schema)
+   elseif schema_type == RECORD then
+      return avro.avro_schema_record_size(self.schema)
+   elseif schema_type == UNION then
+      return avro.avro_schema_union_size(self.schema)
+   else
+      error("Can only get the size of a fixed, record, or union schema")
+   end
 end
 
 function Schema_class:to_json()

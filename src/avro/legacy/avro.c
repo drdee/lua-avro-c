@@ -1178,6 +1178,35 @@ l_schema_type(lua_State *L)
 
 
 /**
+ * Returns the "size" of the schema.
+ */
+
+static int
+l_schema_size(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    switch (avro_typeof(schema)) {
+        case AVRO_FIXED:
+            lua_pushnumber(L, avro_schema_fixed_size(schema));
+            return 1;
+
+        case AVRO_RECORD:
+            lua_pushnumber(L, avro_schema_record_size(schema));
+            return 1;
+
+        case AVRO_UNION:
+            lua_pushnumber(L, avro_schema_union_size(schema));
+            return 1;
+
+        default:
+            lua_pushliteral(L, "Can only get the size of a fixed, "
+                            "record, or union schema");
+            return lua_error(L);
+    }
+}
+
+
+/**
  * Appends a branch to a union schema.
  */
 
@@ -1980,6 +2009,7 @@ static const luaL_Reg  schema_methods[] =
     {"append_symbol", l_schema_append_symbol},
     {"new_raw_value", l_schema_new_raw_value},
     {"new_wrapped_value", l_schema_new_wrapped_value},
+    {"size", l_schema_size},
     {"to_json", l_schema_tostring},
     {"type", l_schema_type},
     {NULL, NULL}
