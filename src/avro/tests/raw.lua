@@ -107,6 +107,24 @@ do
 end
 
 ------------------------------------------------------------------------
+-- set_from_ast conversions
+
+do
+   function test(schema, ast, raw)
+      local value1 = schema:new_raw_value()
+      local value2 = schema:new_raw_value()
+      value1:set_from_ast(ast)
+      value2:set(raw)
+      assert(value1 == value2)
+   end
+
+   test(A.string, 12, "12")
+   test(A.string, "12", "12")
+   test(A.int, "12", 12)
+   test(A.int, 12, 12)
+end
+
+------------------------------------------------------------------------
 -- Records
 
 do

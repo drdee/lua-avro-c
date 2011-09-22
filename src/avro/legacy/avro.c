@@ -648,16 +648,28 @@ l_value_set_from_ast(lua_State *L)
     switch (avro_value_get_type(value))
     {
         case AVRO_BOOLEAN:
+        case AVRO_NULL:
+        case AVRO_ENUM:
+            return l_value_set(L);
+
         case AVRO_BYTES:
+        case AVRO_STRING:
+        case AVRO_FIXED:
+            {
+                /* Force parameter 2 to be a string */
+                luaL_checklstring(L, 2, NULL);
+                return l_value_set(L);
+            }
+
         case AVRO_DOUBLE:
         case AVRO_FLOAT:
         case AVRO_INT32:
         case AVRO_INT64:
-        case AVRO_NULL:
-        case AVRO_STRING:
-        case AVRO_ENUM:
-        case AVRO_FIXED:
-            return l_value_set(L);
+            {
+                lua_pushvalue(L, 1);
+                lua_pushnumber(L, luaL_checknumber(L, 2));
+                return l_value_set(L);
+            }
 
         case AVRO_ARRAY:
             {

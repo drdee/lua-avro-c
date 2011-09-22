@@ -25,6 +25,7 @@ local next = next
 local pairs = pairs
 local print = print
 local string = string
+local tonumber = tonumber
 local tostring = tostring
 local type = type
 
@@ -1170,16 +1171,20 @@ function Value_class:set_from_ast(ast)
    local value_type = self:type()
 
    if value_type == BOOLEAN
-   or value_type == BYTES
-   or value_type == DOUBLE
+   or value_type == NULL
+   or value_type == ENUM then
+      self:set(ast)
+
+   elseif value_type == BYTES
+   or value_type == STRING
+   or value_type == FIXED then
+      self:set(tostring(ast))
+
+   elseif value_type == DOUBLE
    or value_type == FLOAT
    or value_type == INT
-   or value_type == LONG
-   or value_type == NULL
-   or value_type == STRING
-   or value_type == ENUM
-   or value_type == FIXED then
-      self:set(ast)
+   or value_type == LONG then
+      self:set(tonumber(ast))
 
    elseif value_type == ARRAY then
       self:reset()
