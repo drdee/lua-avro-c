@@ -734,30 +734,28 @@ l_value_set_from_ast(lua_State *L)
                     /* Stack is now: -3 AST table; -2 key; -1 value */
 
                     /*
-                     * Push a copy of the key so we can safely call
-                     * lua_tolstring to get a string key
+                     * Call the get() method to retrieve the field with
+                     * the given index.
                      */
 
-                    const char  *key;
-                    lua_pushvalue(L, -2);
-                    key = lua_tostring(L, -1);
+                    lua_pushcfunction(L, l_value_get);
+                    lua_pushvalue(L, 1);
+                    lua_pushvalue(L, -4);
+                    lua_call(L, 2, 1);
 
                     /* Stack is now:
                      * -4 AST table
                      * -3 key
                      * -2 value
-                     * -1 copied string key
+                     * -1 field
                      */
 
-                    avro_value_t  field;
-                    check(avro_value_get_by_name(value, key, &field, NULL));
                     lua_pushcfunction(L, l_value_set_from_ast);
-                    lua_avro_push_value(L, &field, false);
-                    lua_pushvalue(L, -5);
-                    lua_rawget(L, -7);
+                    lua_pushvalue(L, -2);  /* field */
+                    lua_pushvalue(L, -4);  /* value */
                     lua_call(L, 2, 0);
 
-                    /* Pop off value and copied key to continue loop */
+                    /* Pop off value and field to continue loop */
                     lua_pop(L, 2);
                 }
 
