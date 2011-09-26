@@ -527,11 +527,11 @@ end
 function Schema_class:size()
    local schema_type = self:type()
    if schema_type == FIXED then
-      return avro.avro_schema_fixed_size(self.schema)
+      return tonumber(avro.avro_schema_fixed_size(self.schema))
    elseif schema_type == RECORD then
-      return avro.avro_schema_record_size(self.schema)
+      return tonumber(avro.avro_schema_record_size(self.schema))
    elseif schema_type == UNION then
-      return avro.avro_schema_union_size(self.schema)
+      return tonumber(avro.avro_schema_union_size(self.schema))
    else
       error("Can only get the size of a fixed, record, or union schema")
    end
