@@ -25,6 +25,7 @@ local next = next
 local pairs = pairs
 local print = print
 local string = string
+local table = table
 local tonumber = tonumber
 local tostring = tostring
 local type = type
@@ -437,6 +438,12 @@ int
 avro_schema_record_field_append(avro_schema_t rec_schema, const char *name,
                                 avro_schema_t field_schema);
 
+const char *
+avro_schema_record_field_name(const avro_schema_t rec, int index);
+
+avro_schema_t
+avro_schema_record_field_get_by_index(const avro_schema_t rec, int index);
+
 size_t
 avro_schema_record_size(const avro_schema_t schema);
 
@@ -498,6 +505,10 @@ local memory_writer = avro.avro_writer_memory(nil, 0)
 local Schema_class = {}
 local Schema_mt = { __index = Schema_class }
 
+local function new_schema(schema)
+   return LuaAvroSchema(schema, nil)
+end
+
 function Schema_class:new_raw_value()
    if self.iface == nil then
       self.iface = avro.avro_generic_class_from_schema(self.schema)
@@ -537,6 +548,40 @@ function Schema_class:size()
    end
 end
 
+function Schema_class:fields()
+   if self:type() ~= RECORD then
+      error("Only record schemas have fields")
+   end
+
+   local result = {}
+   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
+   for i = 1,field_count do
+      local name = avro.avro_schema_record_field_name(self.schema, i-1)
+      name = ffi.string(name)
+      local field_schema =
+         avro.avro_schema_record_field_get_by_index(self.schema, i-1)
+      table.insert(result, { [name] = new_schema(field_schema) })
+   end
+
+   return result
+end
+
+function Schema_class:field_names()
+   if self:type() ~= RECORD then
+      error("Only record schemas have fields")
+   end
+
+   local result = {}
+   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
+   for i = 1,field_count do
+      local name = avro.avro_schema_record_field_name(self.schema, i-1)
+      name = ffi.string(name)
+      table.insert(result, name)
+   end
+
+   return result
+end
+
 function Schema_class:to_json()
    avro.avro_writer_memory_set_dest(memory_writer, static_buf, static_size)
    local rc = avro.avro_schema_to_json(self.schema, memory_writer)
@@ -548,6 +593,7 @@ end
 Schema_mt.__tostring = Schema_class.to_json
 
 function Schema_mt:__eq(other)
+   if not other then return false end
    return avro.avro_schema_equal(self.schema, other.schema)
 end
 
@@ -562,10 +608,6 @@ function Schema_mt:__gc()
       end
       self.iface = nil
    end
-end
-
-local function new_schema(schema)
-   return LuaAvroSchema(schema, nil)
 end
 
 function Schema(json)

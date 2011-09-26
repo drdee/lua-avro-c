@@ -1278,6 +1278,67 @@ l_schema_append_symbol(lua_State *L)
 
 
 /**
+ * Returns an array-table of the names of each field in a record.
+ */
+
+static int
+l_schema_field_names(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    if (!is_avro_record(schema)) {
+        lua_pushliteral(L, "Only record schemas have fields");
+        return lua_error(L);
+    }
+
+    lua_newtable(L);
+    size_t  field_count = avro_schema_record_size(schema);
+    size_t  i;
+
+    for (i = 0; i < field_count; i++) {
+        const char  *field_name =
+            avro_schema_record_field_name(schema, i);
+        lua_pushstring(L, field_name);
+        lua_rawseti(L, -2, i+1);
+    }
+
+    return 1;
+}
+
+
+/**
+ * Returns a table of the fields in a record.
+ */
+
+static int
+l_schema_fields(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    if (!is_avro_record(schema)) {
+        lua_pushliteral(L, "Only record schemas have fields");
+        return lua_error(L);
+    }
+
+    lua_newtable(L);
+    size_t  field_count = avro_schema_record_size(schema);
+    size_t  i;
+
+    for (i = 0; i < field_count; i++) {
+        const char  *field_name =
+            avro_schema_record_field_name(schema, i);
+        avro_schema_t  field_schema =
+            avro_schema_record_field_get_by_index(schema, i);
+        lua_newtable(L);
+        lua_pushstring(L, field_name);
+        lua_avro_push_schema(L, field_schema);
+        lua_rawset(L, -3);
+        lua_rawseti(L, -2, i+1);
+    }
+
+    return 1;
+}
+
+
+/**
  * Finalizes an AvroSchema instance.
  */
 
@@ -2035,6 +2096,8 @@ static const luaL_Reg  schema_methods[] =
     {"append_branch", l_schema_append_branch},
     {"append_field", l_schema_append_field},
     {"append_symbol", l_schema_append_symbol},
+    {"field_names", l_schema_field_names},
+    {"fields", l_schema_fields},
     {"new_raw_value", l_schema_new_raw_value},
     {"new_wrapped_value", l_schema_new_wrapped_value},
     {"size", l_schema_size},
