@@ -62,6 +62,7 @@ do
       for i,e in array:iterate(true) do
          assert(e:get() == expected[i])
       end
+      assert(array:get(1):get() == expected[1])
       array:release()
       array2:release()
       array3:release()
@@ -78,7 +79,9 @@ do
    local function test_map(prim_type, expected)
       local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
       local map = schema:new_raw_value()
+      local first_key
       for key,val in pairs(expected) do
+         if not first_key then first_key = key end
          local element = map:set(key)
          element:set(val)
       end
@@ -94,6 +97,7 @@ do
       assert(map == map2)
       assert(map == map3)
       assert(map:hash() == map2:hash())
+      assert(map:get(1):get() == expected[first_key])
       for k,e in map:iterate(true) do
          assert(e:get() == expected[k])
       end
@@ -127,6 +131,19 @@ do
 end
 
 ------------------------------------------------------------------------
+-- Enums
+
+do
+   local schema = A.enum "colors" { "RED", "GREEN", "BLUE" }
+   local value = schema:new_raw_value()
+   value:set("RED")
+   assert(value:get() == "RED")
+   value:set(2)
+   assert(value:get() == "GREEN")
+   value:release()
+end
+
+------------------------------------------------------------------------
 -- Records
 
 do
@@ -145,9 +162,9 @@ do
 
    local rec = schema:new_raw_value()
    rec:get("i"):set(1)
-   rec:get("b"):set(true)
+   rec:get(2):set(true)
    rec:get("s"):set("fantastic")
-   rec:get("ls"):append():set(1)
+   rec:get(4):append():set(1)
    rec:get("ls"):append():set(100)
 
    local rec2 = schema:new_raw_value()
@@ -197,7 +214,7 @@ do
    assert(union == union2)
    assert(union == union3)
 
-   union:set("test")
+   union:set(3)
    union:get():get("a"):set(10)
    union2:copy_from(union)
    union3:set_from_ast { test = { a = 10 } }
@@ -259,8 +276,8 @@ do
    val1:get("b"):set(42)
 
    local val2 = schema1:new_raw_value()
-   val2:get(0):set(1)
-   val2:get(1):set(100)
+   val2:get(1):set(1)
+   val2:get(2):set(100)
 
    local resolved1 = resolver:new_raw_value()
    resolved1:set_source(val1)

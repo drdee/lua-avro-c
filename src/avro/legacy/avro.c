@@ -248,7 +248,7 @@ select_union_branch(lua_State *L, avro_value_t *value, int branch_index)
     int  discriminant;
 
     if (lua_isnumber(L, branch_index)) {
-        discriminant = lua_tointeger(L, branch_index);
+        discriminant = lua_tointeger(L, branch_index) - 1;
     }
 
     else if (lua_isstring(L, branch_index)) {
@@ -403,9 +403,18 @@ l_value_get(lua_State *L)
 
             if (lua_isnumber(L, 2)) {
                 lua_Integer  index = lua_tointeger(L, 2);
+                size_t  map_size;
+                check(avro_value_get_size(value, &map_size));
+
+                if ((index < 1) || (index > map_size)) {
+                    lua_pushnil(L);
+                    lua_pushliteral(L, "Index out of bounds");
+                    return 2;
+                }
+
                 avro_value_t  element_value = { NULL, NULL };
                 const char  *key;
-                check(avro_value_get_by_index(value, index, &element_value, &key));
+                check(avro_value_get_by_index(value, index-1, &element_value, &key));
 
                 if (element_value.self == NULL) {
                     lua_pushnil(L);
@@ -449,7 +458,7 @@ l_value_get(lua_State *L)
             if (lua_isnumber(L, 2)) {
                 lua_Integer  index = lua_tointeger(L, 2);
                 avro_value_t  field_value = { NULL, NULL };
-                check(avro_value_get_by_index(value, index, &field_value, NULL));
+                check(avro_value_get_by_index(value, index-1, &field_value, NULL));
 
                 if (field_value.self == NULL) {
                     lua_pushnil(L);
@@ -586,12 +595,21 @@ l_value_set(lua_State *L)
 
       case AVRO_ENUM:
         {
-            const char  *symbol = luaL_checkstring(L, 2);
-            avro_schema_t  enum_schema = avro_value_get_schema(value);
-            int  symbol_value = avro_schema_enum_get_by_name(enum_schema, symbol);
-            if (symbol_value < 0) {
-                return luaL_error(L, "No symbol named %s", symbol);
+            int  symbol_value;
+
+            if (lua_isnumber(L, 2)) {
+                symbol_value = lua_tointeger(L, 2) - 1;
             }
+
+            else {
+                const char  *symbol = luaL_checkstring(L, 2);
+                avro_schema_t  enum_schema = avro_value_get_schema(value);
+                symbol_value = avro_schema_enum_get_by_name(enum_schema, symbol);
+                if (symbol_value < 0) {
+                    return luaL_error(L, "No symbol named %s", symbol);
+                }
+            }
+
             check(avro_value_set_enum(value, symbol_value));
             return 0;
         }

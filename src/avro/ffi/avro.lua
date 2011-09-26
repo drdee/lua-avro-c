@@ -819,9 +819,14 @@ function Value_class:get(index)
          end
 
       elseif type(index) == "number" then
+         local rc = self.iface.get_size(self.iface, self.self, v_size)
+         if rc ~= 0 then return get_avro_error() end
+         if index < 1 or index > v_size[0] then
+            error "Index out of bounds"
+         end
          local element = LuaAvroValue()
          element.should_decref = false
-         local rc = self.iface.get_by_index(self.iface, self.self, index,
+         local rc = self.iface.get_by_index(self.iface, self.self, index-1,
                                             element, v_const_char_p)
          if rc ~= 0 then return get_avro_error() end
          return element, ffi.string(v_const_char_p[0])
@@ -840,7 +845,7 @@ function Value_class:get(index)
       elseif type(index) == "number" then
          local field = LuaAvroValue()
          field.should_decref = false
-         local rc = self.iface.get_by_index(self.iface, self.self, index, field, nil)
+         local rc = self.iface.get_by_index(self.iface, self.self, index-1, field, nil)
          if rc ~= 0 then return get_avro_error() end
          return field
       end
@@ -861,7 +866,7 @@ function Value_class:get(index)
 
       elseif type(index) == "number" then
          local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, index, branch)
+         local rc = self.iface.set_branch(self.iface, self.self, index-1, branch)
          if rc ~= 0 then return get_avro_error() end
          return branch
 
@@ -945,7 +950,7 @@ function Value_class:set(val)
       end
       local symbol_value
       if type(val) == "number" then
-         symbol_value = val
+         symbol_value = val-1
       else
          local schema = self.iface.get_schema(self.iface, self.self)
          if schema == nil then avro_error() end
@@ -991,7 +996,7 @@ function Value_class:set(val)
 
       elseif type(val) == "number" then
          local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, val, branch)
+         local rc = self.iface.set_branch(self.iface, self.self, val-1, branch)
          if rc ~= 0 then return get_avro_error() end
          return branch
       end
