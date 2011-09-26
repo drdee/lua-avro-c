@@ -471,4 +471,7 @@ do
    wrap1.tail.list.tail.null = nil
 
    assert(raw0 == raw1)
+
+   raw0:release()
+   raw1:release()
 end

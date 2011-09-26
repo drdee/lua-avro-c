@@ -116,6 +116,8 @@ do
       value1:set_from_ast(ast)
       value2:set(raw)
       assert(value1 == value2)
+      value1:release()
+      value2:release()
    end
 
    test(A.string, 12, "12")
@@ -457,4 +459,5 @@ do
    raw_value:get("head"):set(0)
    raw_value:get("tail"):set("list"):get("head"):set(1)
    raw_value:get("tail"):get():get("tail"):set("null")
+   raw_value:release()
 end
