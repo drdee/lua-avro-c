@@ -214,6 +214,14 @@ end
 
 CompoundValue_mt.__tostring = CompoundValue_class.to_json
 
+function CompoundValue_mt:__lt(other)
+   return self.raw < other.raw
+end
+
+function CompoundValue_mt:__le(other)
+   return self.raw <= other.raw
+end
+
 function CompoundValue_mt:__eq(other)
    return self.raw == other.raw
 end

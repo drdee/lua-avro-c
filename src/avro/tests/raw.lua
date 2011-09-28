@@ -227,6 +227,45 @@ do
 end
 
 ------------------------------------------------------------------------
+-- Sort order
+
+do
+   local function test(schema, ast1, ast2)
+      local val1 = schema:new_raw_value()
+      local val2 = schema:new_raw_value()
+
+      val1:set_from_ast(ast1)
+      val2:set_from_ast(ast2)
+
+      assert(val1 < val2)
+      assert(val2 > val1)
+
+      assert(val1 <= val1)
+      assert(val1 >= val1)
+      assert(val2 <= val2)
+      assert(val2 >= val2)
+
+      assert(not (val1 < val1))
+      assert(not (val1 > val1))
+
+      assert(not (val2 < val2))
+      assert(not (val2 > val2))
+
+      val1:release()
+      val2:release()
+   end
+
+   test(A.boolean, false, true)
+   test(A.double, -42.53, 72.12)
+   test(A.float, -42.53, 72.12)
+   test(A.int, -10, 42)
+   test(A.long, -10, 42)
+
+   test(A.array { A.int }, {}, {12})
+   test(A.array { A.int }, {11}, {12})
+end
+
+------------------------------------------------------------------------
 -- ResolvedReader()
 
 do

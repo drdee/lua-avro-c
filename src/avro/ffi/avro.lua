@@ -486,6 +486,9 @@ int
 avro_value_copy(avro_value_t *dest, avro_value_t *src);
 
 int
+avro_value_cmp(avro_value_t *val1, avro_value_t *val2);
+
+int
 avro_value_equal(avro_value_t *val1, avro_value_t *val2);
 
 uint32_t
@@ -1316,6 +1319,16 @@ Value_mt.__tostring = Value_class.to_json
 function Value_mt:__eq(other)
    local eq = avro.avro_value_equal(self, other)
    return eq ~= 0
+end
+
+function Value_mt:__lt(other)
+   local cmp = avro.avro_value_cmp(self, other)
+   return cmp < 0
+end
+
+function Value_mt:__le(other)
+   local cmp = avro.avro_value_cmp(self, other)
+   return cmp <= 0
 end
 
 function Value_class:release()

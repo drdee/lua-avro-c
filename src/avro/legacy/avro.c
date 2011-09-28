@@ -167,6 +167,31 @@ l_value_tostring(lua_State *L)
 
 
 /**
+ * Compares two values.
+ */
+
+static int
+l_value_lt(lua_State *L)
+{
+    avro_value_t  *value1 = lua_avro_get_value(L, 1);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+    int  cmp = avro_value_cmp(value1, value2);
+    lua_pushboolean(L, (cmp < 0));
+    return 1;
+}
+
+static int
+l_value_le(lua_State *L)
+{
+    avro_value_t  *value1 = lua_avro_get_value(L, 1);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+    int  cmp = avro_value_cmp(value1, value2);
+    lua_pushboolean(L, (cmp <= 0));
+    return 1;
+}
+
+
+/**
  * Compares two values for equality.
  */
 
@@ -2184,6 +2209,10 @@ luaopen_avro_legacy_avro(lua_State *L)
     lua_createtable(L, 0, sizeof(value_methods) / sizeof(luaL_reg) - 1);
     luaL_register(L, NULL, value_methods);
     lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_value_lt);
+    lua_setfield(L, -2, "__lt");
+    lua_pushcfunction(L, l_value_le);
+    lua_setfield(L, -2, "__le");
     lua_pushcfunction(L, l_value_eq);
     lua_setfield(L, -2, "__eq");
     lua_pushcfunction(L, l_value_tostring);
