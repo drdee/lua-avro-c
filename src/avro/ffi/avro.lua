@@ -1085,7 +1085,7 @@ function Value_class:add(key)
    return element
 end
 
-function Value_class:discriminant()
+function Value_class:discriminant_index()
    if self:type() ~= UNION then
       error("Can't get discriminant of a non-union value")
    end
@@ -1097,10 +1097,16 @@ function Value_class:discriminant()
    local rc = self.iface.get_discriminant(self.iface, self.self, v_int)
    if rc ~= 0 then avro_error() end
 
+   return v_int[0]+1
+end
+
+function Value_class:discriminant()
+   local disc = self:discriminant_index()
+
    local union_schema = self.iface.get_schema(self.iface, self.self)
    if union_schema == nil then avro_error() end
 
-   local branch = avro.avro_schema_union_branch(union_schema, v_int[0])
+   local branch = avro.avro_schema_union_branch(union_schema, disc-1)
    return ffi.string(avro.avro_schema_type_name(branch))
 end
 

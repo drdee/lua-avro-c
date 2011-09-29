@@ -167,6 +167,10 @@ function CompoundValue_class:add(key, val)
    end
 end
 
+function CompoundValue_class:discriminant_index()
+   return self.raw:discriminant_index()
+end
+
 function CompoundValue_class:discriminant()
    return self.raw:discriminant()
 end

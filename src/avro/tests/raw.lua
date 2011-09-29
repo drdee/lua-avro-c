@@ -203,18 +203,24 @@ do
    local union3 = schema:new_raw_value()
 
    union:set("null")
+   assert(union:discriminant_index() == 1)
+   assert(union:discriminant() == "null")
    union2:copy_from(union)
    union3:set_from_ast(nil)
    assert(union == union2)
    assert(union == union3)
 
    union:get("int"):set(42)
+   assert(union:discriminant_index() == 2)
+   assert(union:discriminant() == "int")
    union2:copy_from(union)
    union3:set_from_ast { int = 42 }
    assert(union == union2)
    assert(union == union3)
 
    union:set(3)
+   assert(union:discriminant_index() == 3)
+   assert(union:discriminant() == "test")
    union:get():get("a"):set(10)
    union2:copy_from(union)
    union3:set_from_ast { test = { a = 10 } }

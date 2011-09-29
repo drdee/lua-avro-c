@@ -124,6 +124,27 @@ l_value_schema_name(lua_State *L)
  */
 
 static int
+l_value_discriminant_index(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+
+    if (avro_value_get_type(value) != AVRO_UNION) {
+        lua_pushliteral(L, "Can't get discriminant of a non-union value");
+        return lua_error(L);
+    }
+
+    int  discriminant;
+    check(avro_value_get_discriminant(value, &discriminant));
+    lua_pushinteger(L, discriminant+1);
+    return 1;
+}
+
+
+/**
+ * Returns the name of the current union branch.
+ */
+
+static int
 l_value_discriminant(lua_State *L)
 {
     avro_value_t  *value = lua_avro_get_value(L, 1);
@@ -2097,6 +2118,7 @@ static const luaL_Reg  value_methods[] =
     {"append", l_value_append},
     {"copy_from", l_value_copy_from},
     {"discriminant", l_value_discriminant},
+    {"discriminant_index", l_value_discriminant_index},
     {"encode", l_value_encode},
     {"encoded_size", l_value_encoded_size},
     {"get", l_value_get},
