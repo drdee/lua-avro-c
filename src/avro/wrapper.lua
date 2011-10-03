@@ -9,6 +9,7 @@
 
 local ACC = require "avro.constants"
 
+local assert = assert
 local getmetatable = getmetatable
 local error = error
 local ipairs = ipairs
@@ -127,7 +128,8 @@ function CompoundValue_class:get_(index)
 end
 
 function CompoundValue_class:get(index)
-   local child = self.raw:get(index)
+   local child, err = self.raw:get(index)
+   if not child then return child, err end
    return get_wrapper(child)
 end
 
