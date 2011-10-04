@@ -16,7 +16,7 @@ local ipairs = ipairs
 local next = next
 local pairs = pairs
 local print = print
-local rawget = rawget
+local rawset = rawset
 local setmetatable = setmetatable
 local tostring = tostring
 local type = type
@@ -39,15 +39,24 @@ module "avro.wrapper"
 -- as "value.ages[2]", and have the result be a Lua number.
 --
 -- In addition to these default wrappers, you can install your own
--- wrapper classes.  A wrapper is defined by a table containing two
+-- wrapper classes.  A wrapper is defined by a table containing three
 -- functions:
 --
---   get(raw_value)
---     Return a wrapper instance for the given raw value.
+--   new()
+--     Return a new, empty wrapper instance for the given raw value.
 --
---   set(raw_value, value)
---     Set the contents of the given raw value.  This should work when
---     "value" is a wrapped value instance or an arbitrary Lua value.
+--   get(raw_value, wrapper)
+--     Causes self (a wrapper instance) to wrap the given raw Avro
+--     value.  self can be nil, in which case this method should create
+--     a new wrapper instance.  The function should always return the
+--     wrapper instance, which does not have to be the same as self.
+--
+--   set(raw_value, wrapper)
+--     Fills in the given raw Avro value with the contents of the
+--     wrapper instance.  (If the wrapper instance is already directly
+--     wrapping that raw value, then you don't need to do anything.)
+--     self can also be an arbitrary Lua value, in which case you should
+--     pass in self to raw_value:set_from_ast().
 --
 -- Each wrapper class is associated with a named Avro schema.  This
 -- means that there can only be a single wrapper class for any of the
@@ -103,12 +112,16 @@ end
 ------------------------------------------------------------------------
 -- Default scalar value wrapper
 
-function ScalarValue.get(raw_value)
+function ScalarValue.new()
+   return nil
+end
+
+function ScalarValue.get(raw_value, wrapper)
    return raw_value:get()
 end
 
-function ScalarValue.set(raw_value, val)
-   raw_value:set(val)
+function ScalarValue.set(raw_value, wrapper)
+   raw_value:set(wrapper)
 end
 
 
@@ -339,7 +352,10 @@ function new_compound_wrapper(schema)
       function class:get(index)
          local child, err = self.raw:get(index)
          if not child then return child, err end
-         return wrappers[index].get(child)
+         local child_wrapper =
+            wrappers[real_index].get(child, self.children[real_index])
+         self.children[real_index] = child_wrapper
+         return child_wrapper
       end
 
       function class:set(index)
@@ -358,7 +374,10 @@ function new_compound_wrapper(schema)
          if real_index then
             local child, err = self.raw:get(real_index)
             if not child then return child, err end
-            return wrappers[real_index].get(child)
+            local child_wrapper =
+               wrappers[real_index].get(child, self.children[real_index])
+            self.children[real_index] = child_wrapper
+            return child_wrapper
          else
             return nil, "No field "..tostring(idx)
          end
@@ -402,7 +421,10 @@ function new_compound_wrapper(schema)
          if not index then
             index = self.raw:discriminant_index()
          end
-         return wrappers[index].get(child)
+         local child_wrapper =
+            wrappers[index].get(child, self.children[index])
+         self.children[index] = child_wrapper
+         return child_wrapper
       end
 
       function class:set(index)
@@ -428,7 +450,10 @@ function new_compound_wrapper(schema)
          if idx == "_" then
             local disc_index = self.raw:discriminant_index()
             local child = self.raw:get()
-            return wrappers[disc_index].get(child)
+            local child_wrapper =
+               wrappers[disc_index].get(child, self.children[disc_index])
+            self.children[disc_index] = child_wrapper
+            return child_wrapper
          end
 
          -- Otherwise see if there's a field with this name or index.
@@ -436,7 +461,10 @@ function new_compound_wrapper(schema)
          if real_index then
             local child, err = self.raw:set(real_index)
             if not child then return child, err end
-            return wrappers[real_index].get(child)
+            local child_wrapper =
+               wrappers[real_index].get(child, self.children[real_index])
+            self.children[real_index] = child_wrapper
+            return child_wrapper
          else
             return nil, "No branch "..tostring(idx)
          end
@@ -471,20 +499,25 @@ function new_compound_wrapper(schema)
 
    -- The actual wrapper functions
 
-   function wrapper.get(raw_value)
-      local obj = { raw=raw_value }
+   function wrapper.new()
+      local obj = { raw=nil, children={} }
       setmetatable(obj, mt)
       return obj
    end
 
-   function wrapper.set(raw_value, val)
-      if val.raw == raw_value then
-         return
-      end
-      if getmetatable(val) == mt then
-         raw_value:copy_from(val.raw)
+   function wrapper.get(raw_value, self)
+      if not self then self = wrapper.new() end
+      rawset(self, "raw", raw_value)
+      return self
+   end
+
+   function wrapper.set(raw_value, self)
+      if getmetatable(self) == mt then
+         if self.raw ~= raw_value then
+            raw_value:copy_from(self.raw)
+         end
       else
-         raw_value:set_from_ast(val)
+         raw_value:set_from_ast(self)
       end
    end
 
