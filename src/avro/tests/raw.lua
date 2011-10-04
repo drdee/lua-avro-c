@@ -36,30 +36,6 @@ function deepcompare(t1,t2,ignore_mt)
 end
 
 ------------------------------------------------------------------------
--- Schema:type()
-
-do
-   local function test_parse(json, expected)
-      local schema = A.Schema(json)
-      local actual = schema:type()
-      assert(actual == expected)
-   end
-
-   local function test_prim(prim_type, expected)
-      test_parse([[{"type": "]]..prim_type..[["}]], expected)
-   end
-
-   test_prim("boolean", A.BOOLEAN)
-   test_prim("bytes", A.BYTES)
-   test_prim("double", A.DOUBLE)
-   test_prim("float", A.FLOAT)
-   test_prim("int", A.INT)
-   test_prim("long", A.LONG)
-   test_prim("null", A.NULL)
-   test_prim("string", A.STRING)
-end
-
-------------------------------------------------------------------------
 -- Arrays
 
 do
@@ -86,6 +62,7 @@ do
       for i,e in array:iterate(true) do
          assert(e:get() == expected[i])
       end
+      assert(array:get(1):get() == expected[1])
       array:release()
       array2:release()
       array3:release()
@@ -102,7 +79,9 @@ do
    local function test_map(prim_type, expected)
       local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
       local map = schema:new_raw_value()
+      local first_key
       for key,val in pairs(expected) do
+         if not first_key then first_key = key end
          local element = map:set(key)
          element:set(val)
       end
@@ -118,6 +97,7 @@ do
       assert(map == map2)
       assert(map == map3)
       assert(map:hash() == map2:hash())
+      assert(map:get(1):get() == expected[first_key])
       for k,e in map:iterate(true) do
          assert(e:get() == expected[k])
       end
@@ -128,6 +108,39 @@ do
 
    test_map("int", { a=1,b=2,c=3,d=4 })
    test_map("string", { a="", b="a", c="hello", d="world!" })
+end
+
+------------------------------------------------------------------------
+-- set_from_ast conversions
+
+do
+   function test(schema, ast, raw)
+      local value1 = schema:new_raw_value()
+      local value2 = schema:new_raw_value()
+      value1:set_from_ast(ast)
+      value2:set(raw)
+      assert(value1 == value2)
+      value1:release()
+      value2:release()
+   end
+
+   test(A.string, 12, "12")
+   test(A.string, "12", "12")
+   test(A.int, "12", 12)
+   test(A.int, 12, 12)
+end
+
+------------------------------------------------------------------------
+-- Enums
+
+do
+   local schema = A.enum "colors" { "RED", "GREEN", "BLUE" }
+   local value = schema:new_raw_value()
+   value:set("RED")
+   assert(value:get() == "RED")
+   value:set(2)
+   assert(value:get() == "GREEN")
+   value:release()
 end
 
 ------------------------------------------------------------------------
@@ -149,9 +162,9 @@ do
 
    local rec = schema:new_raw_value()
    rec:get("i"):set(1)
-   rec:get("b"):set(true)
+   rec:get(2):set(true)
    rec:get("s"):set("fantastic")
-   rec:get("ls"):append():set(1)
+   rec:get(4):append():set(1)
    rec:get("ls"):append():set(100)
 
    local rec2 = schema:new_raw_value()
@@ -190,18 +203,24 @@ do
    local union3 = schema:new_raw_value()
 
    union:set("null")
+   assert(union:discriminant_index() == 1)
+   assert(union:discriminant() == "null")
    union2:copy_from(union)
    union3:set_from_ast(nil)
    assert(union == union2)
    assert(union == union3)
 
    union:get("int"):set(42)
+   assert(union:discriminant_index() == 2)
+   assert(union:discriminant() == "int")
    union2:copy_from(union)
    union3:set_from_ast { int = 42 }
    assert(union == union2)
    assert(union == union3)
 
-   union:set("test")
+   union:set(3)
+   assert(union:discriminant_index() == 3)
+   assert(union:discriminant() == "test")
    union:get():get("a"):set(10)
    union2:copy_from(union)
    union3:set_from_ast { test = { a = 10 } }
@@ -211,6 +230,45 @@ do
    union:release()
    union2:release()
    union3:release()
+end
+
+------------------------------------------------------------------------
+-- Sort order
+
+do
+   local function test(schema, ast1, ast2)
+      local val1 = schema:new_raw_value()
+      local val2 = schema:new_raw_value()
+
+      val1:set_from_ast(ast1)
+      val2:set_from_ast(ast2)
+
+      assert(val1 < val2)
+      assert(val2 > val1)
+
+      assert(val1 <= val1)
+      assert(val1 >= val1)
+      assert(val2 <= val2)
+      assert(val2 >= val2)
+
+      assert(not (val1 < val1))
+      assert(not (val1 > val1))
+
+      assert(not (val2 < val2))
+      assert(not (val2 > val2))
+
+      val1:release()
+      val2:release()
+   end
+
+   test(A.boolean, false, true)
+   test(A.double, -42.53, 72.12)
+   test(A.float, -42.53, 72.12)
+   test(A.int, -10, 42)
+   test(A.long, -10, 42)
+
+   test(A.array { A.int }, {}, {12})
+   test(A.array { A.int }, {11}, {12})
 end
 
 ------------------------------------------------------------------------
@@ -263,8 +321,8 @@ do
    val1:get("b"):set(42)
 
    local val2 = schema1:new_raw_value()
-   val2:get(0):set(1)
-   val2:get(1):set(100)
+   val2:get(1):set(1)
+   val2:get(2):set(100)
 
    local resolved1 = resolver:new_raw_value()
    resolved1:set_source(val1)
@@ -448,4 +506,20 @@ do
 
    -- And cleanup
    os.remove(filename)
+end
+
+------------------------------------------------------------------------
+-- Recursive
+
+do
+   local schema = A.record "list" {
+      {head = A.long},
+      {tail = A.union {A.null, A.link "list"}},
+   }
+
+   local raw_value = schema:new_raw_value()
+   raw_value:get("head"):set(0)
+   raw_value:get("tail"):set("list"):get("head"):set(1)
+   raw_value:get("tail"):get():get("tail"):set("null")
+   raw_value:release()
 end

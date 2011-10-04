@@ -88,9 +88,11 @@ INSTALLED_C := $(patsubst build/%,$(DESTDIR)$(LUA_LIBDIR)/%,$(BUILD_SO_C))
 build-c: $(BUILD_O_C) $(BUILD_SO_C)
 
 build/%.o: src/%.c
+	@mkdir -p $(dir $@)
 	$(QUIET_CC)$(CC) -I$(LUA_INCDIR) -o $@ $(CFLAGS) -c $(AVRO_CFLAGS) $<
 
 build/%.so: build/%.o
+	@mkdir -p $(dir $@)
 	$(QUIET_LINK)$(CC) -o $@ $(LIBFLAG) $(AVRO_LDFLAGS) $<
 
 test: build

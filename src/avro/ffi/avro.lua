@@ -25,10 +25,12 @@ local next = next
 local pairs = pairs
 local print = print
 local string = string
+local table = table
+local tonumber = tonumber
 local tostring = tostring
 local type = type
 
-module "avro.c.ffi"
+module "avro.ffi.avro"
 
 local avro = ffi.load("avro")
 
@@ -308,6 +310,9 @@ void
 avro_reader_free(avro_reader_t reader);
 
 int
+avro_schema_to_json(const avro_schema_t schema, avro_writer_t out);
+
+int
 avro_value_read(avro_reader_t reader, avro_value_t *dest);
 
 int
@@ -324,6 +329,9 @@ avro_writer_memory_set_dest(avro_writer_t r, const char *buf, int64_t len);
 
 void
 avro_writer_free(avro_writer_t writer);
+
+int64_t
+avro_writer_tell(avro_writer_t writer);
 ]]
 
 -- avro/resolver.h
@@ -359,14 +367,44 @@ avro_schema_array(const avro_schema_t items);
 avro_schema_t
 avro_schema_array_items(avro_schema_t schema);
 
+avro_schema_t
+avro_schema_boolean(void);
+
+avro_schema_t
+avro_schema_bytes(void);
+
 void
 avro_schema_decref(avro_schema_t schema);
+
+avro_schema_t
+avro_schema_double(void);
+
+avro_schema_t
+avro_schema_enum(const char *name);
 
 const char *
 avro_schema_enum_get(const avro_schema_t schema, int index);
 
 int
 avro_schema_enum_get_by_name(const avro_schema_t schema, const char *name);
+
+size_t
+avro_schema_enum_size(const avro_schema_t schema);
+
+int
+avro_schema_enum_symbol_append(avro_schema_t schema, const char *symbol);
+
+int
+avro_schema_equal(avro_schema_t a, avro_schema_t b);
+
+avro_schema_t
+avro_schema_fixed(const char *name, int64_t size);
+
+size_t
+avro_schema_fixed_size(const avro_schema_t schema);
+
+avro_schema_t
+avro_schema_float(void);
 
 int
 avro_schema_from_json(const char *json_str, const int32_t json_len,
@@ -376,10 +414,53 @@ avro_schema_t
 avro_schema_incref(avro_schema_t schema);
 
 avro_schema_t
+avro_schema_int(void);
+
+avro_schema_t
+avro_schema_link(const avro_schema_t target);
+
+avro_schema_t
+avro_schema_link_target(avro_schema_t schema);
+
+avro_schema_t
+avro_schema_long(void);
+
+avro_schema_t
+avro_schema_map(const avro_schema_t values);
+
+avro_schema_t
 avro_schema_map_values(avro_schema_t schema);
+
+avro_schema_t
+avro_schema_null(void);
+
+avro_schema_t
+avro_schema_record(const char *name, const char *namespace);
+
+int
+avro_schema_record_field_append(avro_schema_t rec_schema, const char *name,
+                                avro_schema_t field_schema);
+
+const char *
+avro_schema_record_field_name(const avro_schema_t rec, int index);
+
+avro_schema_t
+avro_schema_record_field_get_by_index(const avro_schema_t rec, int index);
+
+size_t
+avro_schema_record_size(const avro_schema_t schema);
+
+avro_schema_t
+avro_schema_string(void);
 
 const char *
 avro_schema_type_name(const avro_schema_t schema);
+
+avro_schema_t
+avro_schema_union(void);
+
+int
+avro_schema_union_append(avro_schema_t schema, avro_schema_t branch);
 
 avro_schema_t
 avro_schema_union_branch(avro_schema_t schema, int discriminant);
@@ -387,6 +468,9 @@ avro_schema_union_branch(avro_schema_t schema, int discriminant);
 avro_schema_t
 avro_schema_union_branch_by_name(avro_schema_t schema, int *branch_index,
                                  const char *branch_name);
+
+size_t
+avro_schema_union_size(const avro_schema_t schema);
 ]]
 
 -- avro/value.h
@@ -408,6 +492,9 @@ int
 avro_value_copy(avro_value_t *dest, avro_value_t *src);
 
 int
+avro_value_cmp(avro_value_t *val1, avro_value_t *val2);
+
+int
 avro_value_equal(avro_value_t *val1, avro_value_t *val2);
 
 uint32_t
@@ -417,13 +504,25 @@ int
 avro_value_to_json(const avro_value_t *value, int one_line, char **str);
 ]]
 
+local static_buf = ffi.new([[ char[65536] ]])
+local static_size = 65536
+local memory_writer = avro.avro_writer_memory(nil, 0)
+
 ------------------------------------------------------------------------
 -- Schemas
 
 local Schema_class = {}
 local Schema_mt = { __index = Schema_class }
 
+local function new_schema(schema)
+   return LuaAvroSchema(schema, nil)
+end
+
 function Schema_class:new_raw_value()
+   if self.iface == nil then
+      self.iface = avro.avro_generic_class_from_schema(self.schema)
+      if self.iface == nil then avro_error() end
+   end
    local value = LuaAvroValue()
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
@@ -441,8 +540,45 @@ function Schema_class:raw()
    return self.schema
 end
 
+local uintptr_t = ffi.typeof [[ uintptr_t ]]
+function Schema_class:id()
+   return tostring(ffi.cast(uintptr_t, self.schema))
+end
+
 function Schema_class:type()
    return self.schema[0].type
+end
+
+function Schema_class:name()
+   return ffi.string(avro.avro_schema_type_name(self.schema))
+end
+
+function Schema_class:size()
+   local schema_type = self:type()
+   if schema_type == FIXED then
+      return tonumber(avro.avro_schema_fixed_size(self.schema))
+   elseif schema_type == RECORD then
+      return tonumber(avro.avro_schema_record_size(self.schema))
+   elseif schema_type == UNION then
+      return tonumber(avro.avro_schema_union_size(self.schema))
+   else
+      error("Can only get the size of a fixed, record, or union schema")
+   end
+end
+
+function Schema_class:to_json()
+   avro.avro_writer_memory_set_dest(memory_writer, static_buf, static_size)
+   local rc = avro.avro_schema_to_json(self.schema, memory_writer)
+   if rc ~= 0 then avro_error() end
+   local length = avro.avro_writer_tell(memory_writer)
+   return ffi.string(static_buf, length)
+end
+
+Schema_mt.__tostring = Schema_class.to_json
+
+function Schema_mt:__eq(other)
+   if not other then return false end
+   return avro.avro_schema_equal(self.schema, other.schema)
 end
 
 function Schema_mt:__gc()
@@ -458,19 +594,44 @@ function Schema_mt:__gc()
    end
 end
 
-local function new_schema(schema)
-   local iface = avro.avro_generic_class_from_schema(schema)
-   return LuaAvroSchema(schema, iface)
+function Schema(json)
+   if type(json) == "string" then
+      local schema
+
+      if json == "boolean" then
+         schema = avro.avro_schema_boolean()
+      elseif json == "bytes" then
+         schema = avro.avro_schema_bytes()
+      elseif json == "double" then
+         schema = avro.avro_schema_double()
+      elseif json == "float" then
+         schema = avro.avro_schema_float()
+      elseif json == "int" then
+         schema = avro.avro_schema_int()
+      elseif json == "long" then
+         schema = avro.avro_schema_long()
+      elseif json == "null" then
+         schema = avro.avro_schema_null()
+      elseif json == "string" then
+         schema = avro.avro_schema_string()
+      else
+         local json_len = #json
+         local schema_p = ffi.new(avro_schema_t_ptr)
+         local schema_error = ffi.new(avro_schema_error_t_ptr)
+         local rc = avro.avro_schema_from_json(json, json_len, schema_p, schema_error)
+         if rc ~= 0 then avro_error() end
+         schema = schema_p[0]
+      end
+
+      return new_schema(schema)
+   elseif ffi.istype(LuaAvroSchema, json) then
+      return json
+   end
 end
 
-function Schema(json)
-   local json_len = #json
-   local schema = ffi.new(avro_schema_t_ptr)
-   local schema_error = ffi.new(avro_schema_error_t_ptr)
-   local rc = avro.avro_schema_from_json(json, json_len, schema, schema_error)
-   if rc ~= 0 then avro_error() end
-   return new_schema(schema[0])
-end
+LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
+
+-- Arrays
 
 function ArraySchema(items)
    local schema = avro.avro_schema_array(items.schema)
@@ -478,7 +639,166 @@ function ArraySchema(items)
    return new_schema(schema)
 end
 
-LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
+function Schema_class:item_schema()
+   local schema = avro.avro_schema_array_items(self.schema)
+   if schema == nil then avro_error() end
+   avro.avro_schema_incref(schema)
+   return new_schema(schema)
+end
+
+-- Enums
+
+function EnumSchema(name)
+   local schema = avro.avro_schema_enum(name)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:append_symbol(name)
+   local rc =
+      avro.avro_schema_enum_symbol_append(self.schema, name)
+   if rc ~= 0 then avro_error() end
+end
+
+-- Fixeds
+
+function FixedSchema(name, size)
+   local schema = avro.avro_schema_fixed(name, size)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+-- Maps
+
+function MapSchema(values)
+   local schema = avro.avro_schema_map(values.schema)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:value_schema()
+   local schema = avro.avro_schema_map_values(self.schema)
+   if schema == nil then avro_error() end
+   avro.avro_schema_incref(schema)
+   return new_schema(schema)
+end
+
+-- Records
+
+function RecordSchema(name)
+   local schema = avro.avro_schema_record(name, nil)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:append_field(name, field_schema)
+   local rc =
+      avro.avro_schema_record_field_append(self.schema, name,
+                                           field_schema.schema)
+   if rc ~= 0 then avro_error() end
+end
+
+function Schema_class:fields()
+   if self:type() ~= RECORD then
+      error("Only record schemas have fields")
+   end
+
+   local result = {}
+   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
+   for i = 1,field_count do
+      local name = avro.avro_schema_record_field_name(self.schema, i-1)
+      name = ffi.string(name)
+      local field_schema =
+         avro.avro_schema_record_field_get_by_index(self.schema, i-1)
+      avro.avro_schema_incref(field_schema)
+      table.insert(result, { [name] = new_schema(field_schema) })
+   end
+
+   return result
+end
+
+function Schema_class:field_names()
+   if self:type() ~= RECORD then
+      error("Only record schemas have fields")
+   end
+
+   local result = {}
+   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
+   for i = 1,field_count do
+      local name = avro.avro_schema_record_field_name(self.schema, i-1)
+      name = ffi.string(name)
+      table.insert(result, name)
+   end
+
+   return result
+end
+
+-- Unions
+
+function UnionSchema(items)
+   local schema = avro.avro_schema_union()
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:append_branch(branch_schema)
+   local rc =
+      avro.avro_schema_union_append(self.schema, branch_schema.schema)
+   if rc ~= 0 then avro_error() end
+end
+
+function Schema_class:branches()
+   if self:type() ~= UNION then
+      error("Only union schemas have branches")
+   end
+
+   local result = {}
+   local branch_count = tonumber(avro.avro_schema_union_size(self.schema))
+   for i = 1,branch_count do
+      local branch_schema =
+         avro.avro_schema_union_branch(self.schema, i-1)
+      local name = avro.avro_schema_type_name(branch_schema)
+      name = ffi.string(name)
+      avro.avro_schema_incref(branch_schema)
+      table.insert(result, { [name] = new_schema(branch_schema) })
+   end
+
+   return result
+end
+
+function Schema_class:branch_names()
+   if self:type() ~= union then
+      error("Only union schemas have branches")
+   end
+
+   local result = {}
+   local branch_count = tonumber(avro.avro_schema_union_size(self.schema))
+   for i = 1,branch_count do
+      local branch_schema =
+         avro.avro_schema_union_branch(self.schema, i-1)
+      local name = avro.avro_schema_type_name(self.schema)
+      name = ffi.string(name)
+      table.insert(result, name)
+   end
+
+   return result
+end
+
+-- Links
+
+function LinkSchema(target)
+   local schema = avro.avro_schema_link(target.schema)
+   if schema == nil then avro_error() end
+   return new_schema(schema)
+end
+
+function Schema_class:link_target()
+   local schema = avro.avro_schema_link_target(self.schema)
+   if schema == nil then avro_error() end
+   avro.avro_schema_incref(schema)
+   return new_schema(schema)
+end
+
 
 ------------------------------------------------------------------------
 -- Values
@@ -619,9 +939,14 @@ function Value_class:get(index)
          end
 
       elseif type(index) == "number" then
+         local rc = self.iface.get_size(self.iface, self.self, v_size)
+         if rc ~= 0 then return get_avro_error() end
+         if index < 1 or index > v_size[0] then
+            error "Index out of bounds"
+         end
          local element = LuaAvroValue()
          element.should_decref = false
-         local rc = self.iface.get_by_index(self.iface, self.self, index,
+         local rc = self.iface.get_by_index(self.iface, self.self, index-1,
                                             element, v_const_char_p)
          if rc ~= 0 then return get_avro_error() end
          return element, ffi.string(v_const_char_p[0])
@@ -640,7 +965,7 @@ function Value_class:get(index)
       elseif type(index) == "number" then
          local field = LuaAvroValue()
          field.should_decref = false
-         local rc = self.iface.get_by_index(self.iface, self.self, index, field, nil)
+         local rc = self.iface.get_by_index(self.iface, self.self, index-1, field, nil)
          if rc ~= 0 then return get_avro_error() end
          return field
       end
@@ -661,7 +986,7 @@ function Value_class:get(index)
 
       elseif type(index) == "number" then
          local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, index, branch)
+         local rc = self.iface.set_branch(self.iface, self.self, index-1, branch)
          if rc ~= 0 then return get_avro_error() end
          return branch
 
@@ -745,7 +1070,7 @@ function Value_class:set(val)
       end
       local symbol_value
       if type(val) == "number" then
-         symbol_value = val
+         symbol_value = val-1
       else
          local schema = self.iface.get_schema(self.iface, self.self)
          if schema == nil then avro_error() end
@@ -791,7 +1116,7 @@ function Value_class:set(val)
 
       elseif type(val) == "number" then
          local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, val, branch)
+         local rc = self.iface.set_branch(self.iface, self.self, val-1, branch)
          if rc ~= 0 then return get_avro_error() end
          return branch
       end
@@ -835,7 +1160,7 @@ function Value_class:add(key)
    return element
 end
 
-function Value_class:discriminant()
+function Value_class:discriminant_index()
    if self:type() ~= UNION then
       error("Can't get discriminant of a non-union value")
    end
@@ -847,16 +1172,18 @@ function Value_class:discriminant()
    local rc = self.iface.get_discriminant(self.iface, self.self, v_int)
    if rc ~= 0 then avro_error() end
 
+   return v_int[0]+1
+end
+
+function Value_class:discriminant()
+   local disc = self:discriminant_index()
+
    local union_schema = self.iface.get_schema(self.iface, self.self)
    if union_schema == nil then avro_error() end
 
-   local branch = avro.avro_schema_union_branch(union_schema, v_int[0])
+   local branch = avro.avro_schema_union_branch(union_schema, disc-1)
    return ffi.string(avro.avro_schema_type_name(branch))
 end
-
-local static_buf = ffi.new([[ char[65536] ]])
-local static_size = 65536
-local memory_writer = avro.avro_writer_memory(nil, 0)
 
 function Value_class:encode()
    local size = self:encoded_size()
@@ -975,16 +1302,20 @@ function Value_class:set_from_ast(ast)
    local value_type = self:type()
 
    if value_type == BOOLEAN
-   or value_type == BYTES
-   or value_type == DOUBLE
+   or value_type == NULL
+   or value_type == ENUM then
+      self:set(ast)
+
+   elseif value_type == BYTES
+   or value_type == STRING
+   or value_type == FIXED then
+      self:set(tostring(ast))
+
+   elseif value_type == DOUBLE
    or value_type == FLOAT
    or value_type == INT
-   or value_type == LONG
-   or value_type == NULL
-   or value_type == STRING
-   or value_type == ENUM
-   or value_type == FIXED then
-      self:set(ast)
+   or value_type == LONG then
+      self:set(tonumber(ast))
 
    elseif value_type == ARRAY then
       self:reset()
@@ -1030,6 +1361,18 @@ function Value_class:hash()
    return avro.avro_value_hash(self)
 end
 
+function Value_class:schema()
+   local schema = self.iface.get_schema(self.iface, self.self)
+   if schema[0].type == LINK then
+      local target = avro.avro_schema_link_target(schema)
+      avro.avro_schema_incref(target)
+      return new_schema(target)
+   else
+      avro.avro_schema_incref(schema)
+      return new_schema(schema)
+   end
+end
+
 function Value_class:schema_name()
    local schema = self.iface.get_schema(self.iface, self.self)
    return ffi.string(avro.avro_schema_type_name(schema))
@@ -1069,6 +1412,16 @@ Value_mt.__tostring = Value_class.to_json
 function Value_mt:__eq(other)
    local eq = avro.avro_value_equal(self, other)
    return eq ~= 0
+end
+
+function Value_mt:__lt(other)
+   local cmp = avro.avro_value_cmp(self, other)
+   return cmp < 0
+end
+
+function Value_mt:__le(other)
+   local cmp = avro.avro_value_cmp(self, other)
+   return cmp <= 0
 end
 
 function Value_class:release()

@@ -449,3 +449,29 @@ do
    -- And cleanup
    os.remove(filename)
 end
+
+------------------------------------------------------------------------
+-- Recursive
+
+do
+   local schema = A.record "list" {
+      {head = A.long},
+      {tail = A.union {A.null, A.link "list"}},
+   }
+
+   local raw0 = schema:new_raw_value()
+   raw0:get("head"):set(0)
+   raw0:get("tail"):set("list"):get("head"):set(1)
+   raw0:get("tail"):get():get("tail"):set("null")
+
+   local raw1 = schema:new_raw_value()
+   local wrap1 = A.get_wrapper(raw1)
+   wrap1.head = 0
+   wrap1.tail.list.head = 1
+   wrap1.tail.list.tail.null = nil
+
+   assert(raw0 == raw1)
+
+   raw0:release()
+   raw1:release()
+end

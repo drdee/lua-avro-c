@@ -19,6 +19,13 @@
 #include <lualib.h>
 
 
+int
+lua_avro_push_schema(lua_State *L, avro_schema_t schema);
+
+int
+lua_avro_push_schema_no_link(lua_State *L, avro_schema_t schema);
+
+
 /*-----------------------------------------------------------------------
  * Lua access — data
  */
@@ -106,6 +113,20 @@ l_value_type(lua_State *L)
 
 
 /**
+ * Returns the value's schema.
+ */
+
+static int
+l_value_schema(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+    avro_schema_t  schema = avro_value_get_schema(value);
+    lua_avro_push_schema_no_link(L, schema);
+    return 1;
+}
+
+
+/**
  * Returns the name of the value's schema.
  */
 
@@ -115,6 +136,27 @@ l_value_schema_name(lua_State *L)
     avro_value_t  *value = lua_avro_get_value(L, 1);
     avro_schema_t  schema = avro_value_get_schema(value);
     lua_pushstring(L, avro_schema_type_name(schema));
+    return 1;
+}
+
+
+/**
+ * Returns the name of the current union branch.
+ */
+
+static int
+l_value_discriminant_index(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+
+    if (avro_value_get_type(value) != AVRO_UNION) {
+        lua_pushliteral(L, "Can't get discriminant of a non-union value");
+        return lua_error(L);
+    }
+
+    int  discriminant;
+    check(avro_value_get_discriminant(value, &discriminant));
+    lua_pushinteger(L, discriminant+1);
     return 1;
 }
 
@@ -162,6 +204,31 @@ l_value_tostring(lua_State *L)
 
     lua_pushstring(L, json_str);
     free(json_str);
+    return 1;
+}
+
+
+/**
+ * Compares two values.
+ */
+
+static int
+l_value_lt(lua_State *L)
+{
+    avro_value_t  *value1 = lua_avro_get_value(L, 1);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+    int  cmp = avro_value_cmp(value1, value2);
+    lua_pushboolean(L, (cmp < 0));
+    return 1;
+}
+
+static int
+l_value_le(lua_State *L)
+{
+    avro_value_t  *value1 = lua_avro_get_value(L, 1);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+    int  cmp = avro_value_cmp(value1, value2);
+    lua_pushboolean(L, (cmp <= 0));
     return 1;
 }
 
@@ -248,7 +315,7 @@ select_union_branch(lua_State *L, avro_value_t *value, int branch_index)
     int  discriminant;
 
     if (lua_isnumber(L, branch_index)) {
-        discriminant = lua_tointeger(L, branch_index);
+        discriminant = lua_tointeger(L, branch_index) - 1;
     }
 
     else if (lua_isstring(L, branch_index)) {
@@ -403,9 +470,18 @@ l_value_get(lua_State *L)
 
             if (lua_isnumber(L, 2)) {
                 lua_Integer  index = lua_tointeger(L, 2);
+                size_t  map_size;
+                check(avro_value_get_size(value, &map_size));
+
+                if ((index < 1) || (index > map_size)) {
+                    lua_pushnil(L);
+                    lua_pushliteral(L, "Index out of bounds");
+                    return 2;
+                }
+
                 avro_value_t  element_value = { NULL, NULL };
                 const char  *key;
-                check(avro_value_get_by_index(value, index, &element_value, &key));
+                check(avro_value_get_by_index(value, index-1, &element_value, &key));
 
                 if (element_value.self == NULL) {
                     lua_pushnil(L);
@@ -449,7 +525,7 @@ l_value_get(lua_State *L)
             if (lua_isnumber(L, 2)) {
                 lua_Integer  index = lua_tointeger(L, 2);
                 avro_value_t  field_value = { NULL, NULL };
-                check(avro_value_get_by_index(value, index, &field_value, NULL));
+                check(avro_value_get_by_index(value, index-1, &field_value, NULL));
 
                 if (field_value.self == NULL) {
                     lua_pushnil(L);
@@ -586,12 +662,21 @@ l_value_set(lua_State *L)
 
       case AVRO_ENUM:
         {
-            const char  *symbol = luaL_checkstring(L, 2);
-            avro_schema_t  enum_schema = avro_value_get_schema(value);
-            int  symbol_value = avro_schema_enum_get_by_name(enum_schema, symbol);
-            if (symbol_value < 0) {
-                return luaL_error(L, "No symbol named %s", symbol);
+            int  symbol_value;
+
+            if (lua_isnumber(L, 2)) {
+                symbol_value = lua_tointeger(L, 2) - 1;
             }
+
+            else {
+                const char  *symbol = luaL_checkstring(L, 2);
+                avro_schema_t  enum_schema = avro_value_get_schema(value);
+                symbol_value = avro_schema_enum_get_by_name(enum_schema, symbol);
+                if (symbol_value < 0) {
+                    return luaL_error(L, "No symbol named %s", symbol);
+                }
+            }
+
             check(avro_value_set_enum(value, symbol_value));
             return 0;
         }
@@ -648,16 +733,28 @@ l_value_set_from_ast(lua_State *L)
     switch (avro_value_get_type(value))
     {
         case AVRO_BOOLEAN:
+        case AVRO_NULL:
+        case AVRO_ENUM:
+            return l_value_set(L);
+
         case AVRO_BYTES:
+        case AVRO_STRING:
+        case AVRO_FIXED:
+            {
+                /* Force parameter 2 to be a string */
+                luaL_checklstring(L, 2, NULL);
+                return l_value_set(L);
+            }
+
         case AVRO_DOUBLE:
         case AVRO_FLOAT:
         case AVRO_INT32:
         case AVRO_INT64:
-        case AVRO_NULL:
-        case AVRO_STRING:
-        case AVRO_ENUM:
-        case AVRO_FIXED:
-            return l_value_set(L);
+            {
+                lua_pushvalue(L, 1);
+                lua_pushnumber(L, luaL_checknumber(L, 2));
+                return l_value_set(L);
+            }
 
         case AVRO_ARRAY:
             {
@@ -722,30 +819,28 @@ l_value_set_from_ast(lua_State *L)
                     /* Stack is now: -3 AST table; -2 key; -1 value */
 
                     /*
-                     * Push a copy of the key so we can safely call
-                     * lua_tolstring to get a string key
+                     * Call the get() method to retrieve the field with
+                     * the given index.
                      */
 
-                    const char  *key;
-                    lua_pushvalue(L, -2);
-                    key = lua_tostring(L, -1);
+                    lua_pushcfunction(L, l_value_get);
+                    lua_pushvalue(L, 1);
+                    lua_pushvalue(L, -4);
+                    lua_call(L, 2, 1);
 
                     /* Stack is now:
                      * -4 AST table
                      * -3 key
                      * -2 value
-                     * -1 copied string key
+                     * -1 field
                      */
 
-                    avro_value_t  field;
-                    check(avro_value_get_by_name(value, key, &field, NULL));
                     lua_pushcfunction(L, l_value_set_from_ast);
-                    lua_avro_push_value(L, &field, false);
-                    lua_pushvalue(L, -5);
-                    lua_rawget(L, -7);
+                    lua_pushvalue(L, -2);  /* field */
+                    lua_pushvalue(L, -4);  /* value */
                     lua_call(L, 2, 0);
 
-                    /* Pop off value and copied key to continue loop */
+                    /* Pop off value and field to continue loop */
                     lua_pop(L, 2);
                 }
 
@@ -1106,13 +1201,21 @@ int
 lua_avro_push_schema(lua_State *L, avro_schema_t schema)
 {
     LuaAvroSchema  *l_schema;
-
     l_schema = lua_newuserdata(L, sizeof(LuaAvroSchema));
     l_schema->schema = avro_schema_incref(schema);
-    l_schema->iface = avro_generic_class_from_schema(schema);
+    l_schema->iface = NULL;
     luaL_getmetatable(L, MT_AVRO_SCHEMA);
     lua_setmetatable(L, -2);
     return 1;
+}
+
+int
+lua_avro_push_schema_no_link(lua_State *L, avro_schema_t schema)
+{
+    while (is_avro_link(schema)) {
+        schema = avro_schema_link_target(schema);
+    }
+    return lua_avro_push_schema(L, schema);
 }
 
 
@@ -1132,6 +1235,13 @@ static int
 l_schema_new_raw_value(lua_State *L)
 {
     LuaAvroSchema  *l_schema = luaL_checkudata(L, 1, MT_AVRO_SCHEMA);
+    if (l_schema->iface == NULL) {
+        l_schema->iface = avro_generic_class_from_schema(l_schema->schema);
+        if (l_schema->iface == NULL) {
+            lua_pushstring(L, avro_strerror());
+            return lua_error(L);
+        }
+    }
     avro_value_t  value;
     check(avro_generic_value_new(l_schema->iface, &value));
     lua_avro_push_value(L, &value, true);
@@ -1171,6 +1281,265 @@ l_schema_type(lua_State *L)
 
 
 /**
+ * Returns the name of an AvroSchema instance.
+ */
+
+static int
+l_schema_name(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    lua_pushstring(L, avro_schema_type_name(schema));
+    return 1;
+}
+
+
+/*
+ * Several accessors for the contents of a schema.
+ */
+
+static int
+l_schema_id(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    lua_pushlightuserdata(L, schema);
+    return 1;
+}
+
+static int
+l_schema_item_schema(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  items = avro_schema_array_items(schema);
+    if (items == NULL) {
+        return lua_avro_error(L);
+    } else {
+        lua_avro_push_schema(L, items);
+        return 1;
+    }
+}
+
+static int
+l_schema_value_schema(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  values = avro_schema_map_values(schema);
+    if (values == NULL) {
+        return lua_avro_error(L);
+    } else {
+        lua_avro_push_schema(L, values);
+        return 1;
+    }
+}
+
+static int
+l_schema_link_target(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  target = avro_schema_link_target(schema);
+    if (target == NULL) {
+        return lua_avro_error(L);
+    } else {
+        lua_avro_push_schema(L, target);
+        return 1;
+    }
+}
+
+
+/**
+ * Returns the "size" of the schema.
+ */
+
+static int
+l_schema_size(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    switch (avro_typeof(schema)) {
+        case AVRO_FIXED:
+            lua_pushnumber(L, avro_schema_fixed_size(schema));
+            return 1;
+
+        case AVRO_RECORD:
+            lua_pushnumber(L, avro_schema_record_size(schema));
+            return 1;
+
+        case AVRO_UNION:
+            lua_pushnumber(L, avro_schema_union_size(schema));
+            return 1;
+
+        default:
+            lua_pushliteral(L, "Can only get the size of a fixed, "
+                            "record, or union schema");
+            return lua_error(L);
+    }
+}
+
+
+/**
+ * Appends a branch to a union schema.
+ */
+
+static int
+l_schema_append_branch(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  branch_schema = lua_avro_get_schema(L, 2);
+    check(avro_schema_union_append(schema, branch_schema));
+    return 0;
+}
+
+
+/**
+ * Appends a field to a record schema.
+ */
+
+static int
+l_schema_append_field(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    const char  *field_name = luaL_checkstring(L, 2);
+    avro_schema_t  field_schema = lua_avro_get_schema(L, 3);
+    check(avro_schema_record_field_append(schema, field_name, field_schema));
+    return 0;
+}
+
+
+/**
+ * Appends a symbol to an enum schema.
+ */
+
+static int
+l_schema_append_symbol(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    const char  *symbol_name = luaL_checkstring(L, 2);
+    check(avro_schema_enum_symbol_append(schema, symbol_name));
+    return 0;
+}
+
+
+/**
+ * Returns an array-table of the names of each field in a record.
+ */
+
+static int
+l_schema_field_names(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    if (!is_avro_record(schema)) {
+        lua_pushliteral(L, "Only record schemas have fields");
+        return lua_error(L);
+    }
+
+    lua_newtable(L);
+    size_t  field_count = avro_schema_record_size(schema);
+    size_t  i;
+
+    for (i = 0; i < field_count; i++) {
+        const char  *field_name =
+            avro_schema_record_field_name(schema, i);
+        lua_pushstring(L, field_name);
+        lua_rawseti(L, -2, i+1);
+    }
+
+    return 1;
+}
+
+
+/**
+ * Returns a table of the fields in a record.
+ */
+
+static int
+l_schema_fields(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    if (!is_avro_record(schema)) {
+        lua_pushliteral(L, "Only record schemas have fields");
+        return lua_error(L);
+    }
+
+    lua_newtable(L);
+    size_t  field_count = avro_schema_record_size(schema);
+    size_t  i;
+
+    for (i = 0; i < field_count; i++) {
+        const char  *field_name =
+            avro_schema_record_field_name(schema, i);
+        avro_schema_t  field_schema =
+            avro_schema_record_field_get_by_index(schema, i);
+        lua_newtable(L);
+        lua_pushstring(L, field_name);
+        lua_avro_push_schema(L, field_schema);
+        lua_rawset(L, -3);
+        lua_rawseti(L, -2, i+1);
+    }
+
+    return 1;
+}
+
+
+/**
+ * Returns an array-table of the names of each branch in a union.
+ */
+
+static int
+l_schema_branch_names(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    if (!is_avro_union(schema)) {
+        lua_pushliteral(L, "Only union schemas have branches");
+        return lua_error(L);
+    }
+
+    lua_newtable(L);
+    size_t  branch_count = avro_schema_union_size(schema);
+    size_t  i;
+
+    for (i = 0; i < branch_count; i++) {
+        avro_schema_t  branch_schema =
+            avro_schema_union_branch(schema, i);
+        const char  *branch_name = avro_schema_type_name(branch_schema);
+        lua_pushstring(L, branch_name);
+        lua_rawseti(L, -2, i+1);
+    }
+
+    return 1;
+}
+
+
+/**
+ * Returns a table of the branches in a union.
+ */
+
+static int
+l_schema_branches(lua_State *L)
+{
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    if (!is_avro_union(schema)) {
+        lua_pushliteral(L, "Only union schemas have branches");
+        return lua_error(L);
+    }
+
+    lua_newtable(L);
+    size_t  branch_count = avro_schema_union_size(schema);
+    size_t  i;
+
+    for (i = 0; i < branch_count; i++) {
+        avro_schema_t  branch_schema =
+            avro_schema_union_branch(schema, i);
+        const char  *branch_name = avro_schema_type_name(branch_schema);
+        lua_newtable(L);
+        lua_pushstring(L, branch_name);
+        lua_avro_push_schema(L, branch_schema);
+        lua_rawset(L, -3);
+        lua_rawseti(L, -2, i+1);
+    }
+
+    return 1;
+}
+
+
+/**
  * Finalizes an AvroSchema instance.
  */
 
@@ -1191,28 +1560,118 @@ l_schema_gc(lua_State *L)
 
 
 /**
+ * Compares two schemas for equality.
+ */
+
+static int
+l_schema_eq(lua_State *L)
+{
+    avro_schema_t  schema1 = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema2 = lua_avro_get_schema(L, 2);
+    lua_pushboolean(L, avro_schema_equal(schema1, schema2));
+    return 1;
+}
+
+
+/**
+ * Returns the JSON encoding of a schema
+ */
+
+static int
+l_schema_tostring(lua_State *L)
+{
+    static char  static_buf[65536];
+
+    avro_schema_t  schema = lua_avro_get_schema(L, 1);
+    avro_writer_t  writer = avro_writer_memory(static_buf, sizeof(static_buf));
+    int  rc = avro_schema_to_json(schema, writer);
+    int64_t  length = avro_writer_tell(writer);
+    avro_writer_free(writer);
+
+    if (rc != 0) {
+        return lua_avro_error(L);
+    }
+
+    lua_pushlstring(L, static_buf, length);
+    return 1;
+}
+
+
+/**
  * Creates a new AvroSchema instance from a JSON schema string.
  */
 
 static int
 l_schema_new(lua_State *L)
 {
-    size_t  json_len;
-    const char  *json_str = luaL_checklstring(L, 1, &json_len);
+    if (lua_isstring(L, 1)) {
+        size_t  json_len;
+        const char  *json_str = lua_tolstring(L, 1, &json_len);
+        avro_schema_t  schema;
 
-    avro_schema_error_t  schema_error;
-    avro_schema_t  schema;
+        /* First check for the primitive types */
+        if (strcmp(json_str, "boolean") == 0) {
+            schema = avro_schema_boolean();
+        }
 
-    check(avro_schema_from_json(json_str, json_len, &schema, &schema_error));
+        else if (strcmp(json_str, "bytes") == 0) {
+            schema = avro_schema_bytes();
+        }
 
-    lua_avro_push_schema(L, schema);
-    avro_schema_decref(schema);
-    return 1;
+        else if (strcmp(json_str, "double") == 0) {
+            schema = avro_schema_double();
+        }
+
+        else if (strcmp(json_str, "float") == 0) {
+            schema = avro_schema_float();
+        }
+
+        else if (strcmp(json_str, "int") == 0) {
+            schema = avro_schema_int();
+        }
+
+        else if (strcmp(json_str, "long") == 0) {
+            schema = avro_schema_long();
+        }
+
+        else if (strcmp(json_str, "null") == 0) {
+            schema = avro_schema_null();
+        }
+
+        else if (strcmp(json_str, "string") == 0) {
+            schema = avro_schema_string();
+        }
+
+        /* Otherwise assume it's JSON */
+
+        else {
+            avro_schema_error_t  schema_error;
+            check(avro_schema_from_json(json_str, json_len, &schema, &schema_error));
+        }
+
+        lua_avro_push_schema(L, schema);
+        avro_schema_decref(schema);
+        return 1;
+    }
+
+    if (lua_isuserdata(L, 1)) {
+        if (lua_getmetatable(L, 1)) {
+            lua_getfield(L, LUA_REGISTRYINDEX, MT_AVRO_SCHEMA);
+            if (lua_rawequal(L, -1, -2)) {
+                /* This is already a schema object, so just return it. */
+                lua_pop(L, 2);  /* remove both metatables */
+                return 1;
+            }
+        }
+    }
+
+    lua_pushliteral(L, "Invalid input to Schema function");
+    return lua_error(L);
 }
 
 
 /**
- * Creates a new array schema from the given items schema.
+ * Creates a new array schema.
  */
 
 static int
@@ -1220,6 +1679,114 @@ l_schema_new_array(lua_State *L)
 {
     avro_schema_t  items_schema = lua_avro_get_schema(L, 1);
     avro_schema_t  schema = avro_schema_array(items_schema);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new enum schema.
+ */
+
+static int
+l_schema_new_enum(lua_State *L)
+{
+    const char  *name = luaL_checkstring(L, 1);
+    avro_schema_t  schema = avro_schema_enum(name);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new fixed schema.
+ */
+
+static int
+l_schema_new_fixed(lua_State *L)
+{
+    const char  *name = luaL_checkstring(L, 1);
+    lua_Integer  size = luaL_checkinteger(L, 2);
+    avro_schema_t  schema = avro_schema_fixed(name, size);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new map schema.
+ */
+
+static int
+l_schema_new_map(lua_State *L)
+{
+    avro_schema_t  values_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema = avro_schema_map(values_schema);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new record schema.
+ */
+
+static int
+l_schema_new_record(lua_State *L)
+{
+    const char  *name = luaL_checkstring(L, 1);
+    avro_schema_t  schema = avro_schema_record(name, NULL);
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new union schema.
+ */
+
+static int
+l_schema_new_union(lua_State *L)
+{
+    avro_schema_t  schema = avro_schema_union();
+    if (schema == NULL) {
+        return lua_avro_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    avro_schema_decref(schema);
+    return 1;
+}
+
+
+/**
+ * Creates a new link schema.
+ */
+
+static int
+l_schema_new_link(lua_State *L)
+{
+    avro_schema_t  target_schema = lua_avro_get_schema(L, 1);
+    avro_schema_t  schema = avro_schema_link(target_schema);
     if (schema == NULL) {
         return lua_avro_error(L);
     }
@@ -1706,6 +2273,7 @@ static const luaL_Reg  value_methods[] =
     {"append", l_value_append},
     {"copy_from", l_value_copy_from},
     {"discriminant", l_value_discriminant},
+    {"discriminant_index", l_value_discriminant_index},
     {"encode", l_value_encode},
     {"encoded_size", l_value_encoded_size},
     {"get", l_value_get},
@@ -1714,6 +2282,7 @@ static const luaL_Reg  value_methods[] =
     {"raw_value", l_value_raw_value},
     {"release", l_value_release},
     {"reset", l_value_reset},
+    {"schema", l_value_schema},
     {"schema_name", l_value_schema_name},
     {"set", l_value_set},
     {"set_dest", l_value_set_dest},
@@ -1727,9 +2296,23 @@ static const luaL_Reg  value_methods[] =
 
 static const luaL_Reg  schema_methods[] =
 {
+    {"append_branch", l_schema_append_branch},
+    {"append_field", l_schema_append_field},
+    {"append_symbol", l_schema_append_symbol},
+    {"branch_names", l_schema_branch_names},
+    {"branches", l_schema_branches},
+    {"field_names", l_schema_field_names},
+    {"fields", l_schema_fields},
+    {"id", l_schema_id},
+    {"item_schema", l_schema_item_schema},
+    {"name", l_schema_name},
     {"new_raw_value", l_schema_new_raw_value},
     {"new_wrapped_value", l_schema_new_wrapped_value},
+    {"size", l_schema_size},
+    {"to_json", l_schema_tostring},
     {"type", l_schema_type},
+    {"link_target", l_schema_link_target},
+    {"value_schema", l_schema_value_schema},
     {NULL, NULL}
 };
 
@@ -1769,9 +2352,15 @@ static const luaL_Reg  output_file_methods[] =
 static const luaL_Reg  mod_methods[] =
 {
     {"ArraySchema", l_schema_new_array},
+    {"EnumSchema", l_schema_new_enum},
+    {"FixedSchema", l_schema_new_fixed},
+    {"LinkSchema", l_schema_new_link},
+    {"MapSchema", l_schema_new_map},
+    {"RecordSchema", l_schema_new_record},
     {"ResolvedReader", l_resolved_reader_new},
     {"ResolvedWriter", l_resolved_writer_new},
     {"Schema", l_schema_new},
+    {"UnionSchema", l_schema_new_union},
     {"open", l_file_open},
     {"raw_decode_value", l_value_decode_raw},
     {"raw_encode_value", l_value_encode_raw},
@@ -1780,7 +2369,7 @@ static const luaL_Reg  mod_methods[] =
 
 
 int
-luaopen_avro_c_legacy(lua_State *L)
+luaopen_avro_legacy_avro(lua_State *L)
 {
     luaL_loadstring(L, "require 'avro.wrapper'");
     lua_call(L, 0, 0);
@@ -1793,6 +2382,10 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_schema_gc);
     lua_setfield(L, -2, "__gc");
+    lua_pushcfunction(L, l_schema_eq);
+    lua_setfield(L, -2, "__eq");
+    lua_pushcfunction(L, l_schema_tostring);
+    lua_setfield(L, -2, "__tostring");
     lua_pop(L, 1);
 
     /* AvroValue metatable */
@@ -1801,6 +2394,10 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_createtable(L, 0, sizeof(value_methods) / sizeof(luaL_reg) - 1);
     luaL_register(L, NULL, value_methods);
     lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_value_lt);
+    lua_setfield(L, -2, "__lt");
+    lua_pushcfunction(L, l_value_le);
+    lua_setfield(L, -2, "__le");
     lua_pushcfunction(L, l_value_eq);
     lua_setfield(L, -2, "__eq");
     lua_pushcfunction(L, l_value_tostring);
@@ -1852,6 +2449,6 @@ luaopen_avro_c_legacy(lua_State *L)
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
-    luaL_register(L, "avro.c.legacy", mod_methods);
+    luaL_register(L, "avro.legacy.avro", mod_methods);
     return 1;
 }

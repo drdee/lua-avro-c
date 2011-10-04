@@ -1,9 +1,9 @@
 package = "lua-avro"
-version = "scm-0"
+version = "0.8"
 
 source = {
    url = "git@git.redjack.com:fathom/lua-avro.git",
-   branch = "develop"
+   tag = "0.8",
 }
 
 description = {
