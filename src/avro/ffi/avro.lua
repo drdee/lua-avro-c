@@ -420,6 +420,9 @@ avro_schema_t
 avro_schema_link(const avro_schema_t target);
 
 avro_schema_t
+avro_schema_link_target(avro_schema_t schema);
+
+avro_schema_t
 avro_schema_long(void);
 
 avro_schema_t
@@ -465,6 +468,9 @@ avro_schema_union_branch(avro_schema_t schema, int discriminant);
 avro_schema_t
 avro_schema_union_branch_by_name(avro_schema_t schema, int *branch_index,
                                  const char *branch_name);
+
+size_t
+avro_schema_union_size(const avro_schema_t schema);
 ]]
 
 -- avro/value.h
@@ -534,8 +540,17 @@ function Schema_class:raw()
    return self.schema
 end
 
+local uintptr_t = ffi.typeof [[ uintptr_t ]]
+function Schema_class:id()
+   return tostring(ffi.cast(uintptr_t, self.schema))
+end
+
 function Schema_class:type()
    return self.schema[0].type
+end
+
+function Schema_class:name()
+   return ffi.string(avro.avro_schema_type_name(self.schema))
 end
 
 function Schema_class:size()
@@ -549,40 +564,6 @@ function Schema_class:size()
    else
       error("Can only get the size of a fixed, record, or union schema")
    end
-end
-
-function Schema_class:fields()
-   if self:type() ~= RECORD then
-      error("Only record schemas have fields")
-   end
-
-   local result = {}
-   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
-   for i = 1,field_count do
-      local name = avro.avro_schema_record_field_name(self.schema, i-1)
-      name = ffi.string(name)
-      local field_schema =
-         avro.avro_schema_record_field_get_by_index(self.schema, i-1)
-      table.insert(result, { [name] = new_schema(field_schema) })
-   end
-
-   return result
-end
-
-function Schema_class:field_names()
-   if self:type() ~= RECORD then
-      error("Only record schemas have fields")
-   end
-
-   local result = {}
-   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
-   for i = 1,field_count do
-      local name = avro.avro_schema_record_field_name(self.schema, i-1)
-      name = ffi.string(name)
-      table.insert(result, name)
-   end
-
-   return result
 end
 
 function Schema_class:to_json()
@@ -658,6 +639,13 @@ function ArraySchema(items)
    return new_schema(schema)
 end
 
+function Schema_class:item_schema()
+   local schema = avro.avro_schema_array_items(self.schema)
+   if schema == nil then avro_error() end
+   avro.avro_schema_incref(schema)
+   return new_schema(schema)
+end
+
 -- Enums
 
 function EnumSchema(name)
@@ -688,6 +676,13 @@ function MapSchema(values)
    return new_schema(schema)
 end
 
+function Schema_class:value_schema()
+   local schema = avro.avro_schema_map_values(self.schema)
+   if schema == nil then avro_error() end
+   avro.avro_schema_incref(schema)
+   return new_schema(schema)
+end
+
 -- Records
 
 function RecordSchema(name)
@@ -701,6 +696,41 @@ function Schema_class:append_field(name, field_schema)
       avro.avro_schema_record_field_append(self.schema, name,
                                            field_schema.schema)
    if rc ~= 0 then avro_error() end
+end
+
+function Schema_class:fields()
+   if self:type() ~= RECORD then
+      error("Only record schemas have fields")
+   end
+
+   local result = {}
+   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
+   for i = 1,field_count do
+      local name = avro.avro_schema_record_field_name(self.schema, i-1)
+      name = ffi.string(name)
+      local field_schema =
+         avro.avro_schema_record_field_get_by_index(self.schema, i-1)
+      avro.avro_schema_incref(field_schema)
+      table.insert(result, { [name] = new_schema(field_schema) })
+   end
+
+   return result
+end
+
+function Schema_class:field_names()
+   if self:type() ~= RECORD then
+      error("Only record schemas have fields")
+   end
+
+   local result = {}
+   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
+   for i = 1,field_count do
+      local name = avro.avro_schema_record_field_name(self.schema, i-1)
+      name = ffi.string(name)
+      table.insert(result, name)
+   end
+
+   return result
 end
 
 -- Unions
@@ -717,6 +747,43 @@ function Schema_class:append_branch(branch_schema)
    if rc ~= 0 then avro_error() end
 end
 
+function Schema_class:branches()
+   if self:type() ~= UNION then
+      error("Only union schemas have branches")
+   end
+
+   local result = {}
+   local branch_count = tonumber(avro.avro_schema_union_size(self.schema))
+   for i = 1,branch_count do
+      local branch_schema =
+         avro.avro_schema_union_branch(self.schema, i-1)
+      local name = avro.avro_schema_type_name(branch_schema)
+      name = ffi.string(name)
+      avro.avro_schema_incref(branch_schema)
+      table.insert(result, { [name] = new_schema(branch_schema) })
+   end
+
+   return result
+end
+
+function Schema_class:branch_names()
+   if self:type() ~= union then
+      error("Only union schemas have branches")
+   end
+
+   local result = {}
+   local branch_count = tonumber(avro.avro_schema_union_size(self.schema))
+   for i = 1,branch_count do
+      local branch_schema =
+         avro.avro_schema_union_branch(self.schema, i-1)
+      local name = avro.avro_schema_type_name(self.schema)
+      name = ffi.string(name)
+      table.insert(result, name)
+   end
+
+   return result
+end
+
 -- Links
 
 function LinkSchema(target)
@@ -724,6 +791,14 @@ function LinkSchema(target)
    if schema == nil then avro_error() end
    return new_schema(schema)
 end
+
+function Schema_class:link_target()
+   local schema = avro.avro_schema_link_target(self.schema)
+   if schema == nil then avro_error() end
+   avro.avro_schema_incref(schema)
+   return new_schema(schema)
+end
+
 
 ------------------------------------------------------------------------
 -- Values
@@ -1284,6 +1359,18 @@ end
 
 function Value_class:hash()
    return avro.avro_value_hash(self)
+end
+
+function Value_class:schema()
+   local schema = self.iface.get_schema(self.iface, self.self)
+   if schema[0].type == LINK then
+      local target = avro.avro_schema_link_target(schema)
+      avro.avro_schema_incref(target)
+      return new_schema(target)
+   else
+      avro.avro_schema_incref(schema)
+      return new_schema(schema)
+   end
 end
 
 function Value_class:schema_name()
