@@ -1409,7 +1409,14 @@ end
 
 Value_mt.__tostring = Value_class.to_json
 
+function Value_class:cmp(other)
+   return avro.avro_value_cmp(self, other)
+end
+
 function Value_mt:__eq(other)
+   if other == nil then
+      return false
+   end
    local eq = avro.avro_value_equal(self, other)
    return eq ~= 0
 end

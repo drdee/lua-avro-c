@@ -169,6 +169,10 @@ end
 
 cv_metamethods.__tostring = cv_methods.to_json
 
+function cv_methods:cmp(other)
+   return self.raw:cmp(other.raw)
+end
+
 function cv_metamethods:__lt(other)
    return self.raw < other.raw
 end

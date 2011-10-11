@@ -213,6 +213,16 @@ l_value_tostring(lua_State *L)
  */
 
 static int
+l_value_cmp(lua_State *L)
+{
+    avro_value_t  *value1 = lua_avro_get_value(L, 1);
+    avro_value_t  *value2 = lua_avro_get_value(L, 2);
+    int  cmp = avro_value_cmp(value1, value2);
+    lua_pushinteger(L, cmp);
+    return 1;
+}
+
+static int
 l_value_lt(lua_State *L)
 {
     avro_value_t  *value1 = lua_avro_get_value(L, 1);
@@ -2271,6 +2281,7 @@ static const luaL_Reg  value_methods[] =
 {
     {"add", l_value_add},
     {"append", l_value_append},
+    {"cmp", l_value_cmp},
     {"copy_from", l_value_copy_from},
     {"discriminant", l_value_discriminant},
     {"discriminant_index", l_value_discriminant_index},
