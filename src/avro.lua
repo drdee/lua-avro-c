@@ -52,6 +52,8 @@ get_wrapper_class = AW.get_wrapper_class
 set_wrapper_class = AW.set_wrapper_class
 get_wrapper = AW.get_wrapper
 set_wrapper = AW.set_wrapper
+wrapper_tostring = AW.wrapper_tostring
+tostring_wrapper = AW.tostring_wrapper
 
 boolean = AS.boolean
 bytes = AS.bytes

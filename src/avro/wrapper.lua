@@ -18,8 +18,12 @@ local pairs = pairs
 local print = print
 local rawset = rawset
 local setmetatable = setmetatable
+local string = string
+local table = table
 local tostring = tostring
 local type = type
+
+local ffi_present = pcall(require, "ffi")
 
 module "avro.wrapper"
 
@@ -39,7 +43,7 @@ module "avro.wrapper"
 -- as "value.ages[2]", and have the result be a Lua number.
 --
 -- In addition to these default wrappers, you can install your own
--- wrapper classes.  A wrapper is defined by a table containing three
+-- wrapper classes.  A wrapper is defined by a table containing four
 -- functions:
 --
 --   new()
@@ -58,6 +62,9 @@ module "avro.wrapper"
 --     self can also be an arbitrary Lua value, in which case you should
 --     pass in self to raw_value:set_from_ast().
 --
+--   tostring(wrapper)
+--     Returns a human-readable string description of the wrapped value.
+--
 -- Each wrapper class is associated with a named Avro schema.  This
 -- means that there can only be a single wrapper class for any of the
 -- non-named types (boolean, bytes, double, float, int, long, null,
@@ -69,28 +76,35 @@ module "avro.wrapper"
 ------------------------------------------------------------------------
 -- Wrapper dispatch table
 
-local scalar_types_array = {
-   ACC.BOOLEAN, ACC.BYTES, ACC.DOUBLE, ACC.FLOAT, ACC.INT,
-   ACC.LONG, ACC.NULL, ACC.STRING, ACC.ENUM, ACC.FIXED,
-}
-local scalar_types = {}
-for _,v in ipairs(scalar_types_array) do scalar_types[v] = true end
-
 -- These will be filled in below
 local CompoundValue = {}
 local ScalarValue = {}
+local StringValue = {}
+local LongValue = {}
 
 local WRAPPERS = {}
+
+local SCALAR_WRAPPERS = {
+   [ACC.BOOLEAN]=ScalarValue,
+   [ACC.BYTES]=StringValue,
+   [ACC.DOUBLE]=ScalarValue,
+   [ACC.FLOAT]=ScalarValue,
+   [ACC.INT]=ScalarValue,
+   [ACC.LONG]=LongValue,
+   [ACC.NULL]=ScalarValue,
+   [ACC.STRING]=StringValue,
+   [ACC.ENUM]=ScalarValue,
+   [ACC.FIXED]=StringValue,
+}
 
 function get_wrapper_class(schema)
    local wrapper = WRAPPERS[schema:name()]
 
    if not wrapper then
-      if scalar_types[schema:type()] then
-         wrapper = ScalarValue
-      else
-         wrapper = new_compound_wrapper(schema)
+      if SCALAR_WRAPPERS[schema:type()] then
+         return SCALAR_WRAPPERS[schema:type()]
       end
+      wrapper = new_compound_wrapper(schema)
    end
 
    return wrapper
@@ -108,6 +122,18 @@ function set_wrapper(raw_value, value)
    return get_wrapper_class(raw_value:schema()).set(raw_value, value)
 end
 
+function wrapper_tostring(wrapper, value)
+   if wrapper.tostring then
+      return wrapper.tostring(value)
+   else
+      return tostring(value)
+   end
+end
+
+function tostring_wrapper(raw_value, value)
+   return wrapper_tostring(get_wrapper_class(raw_value:schema()), value)
+end
+
 
 ------------------------------------------------------------------------
 -- Default scalar value wrapper
@@ -122,6 +148,26 @@ end
 
 function ScalarValue.set(raw_value, wrapper)
    raw_value:set(wrapper)
+end
+
+StringValue.new = ScalarValue.new
+StringValue.get = ScalarValue.get
+StringValue.set = ScalarValue.set
+
+function StringValue.tostring(wrapper)
+   return string.format("%q", wrapper)
+end
+
+LongValue.new = ScalarValue.new
+LongValue.get = ScalarValue.get
+LongValue.set = ScalarValue.set
+
+if ffi_present then
+   function LongValue.tostring(wrapper)
+      -- LuaJIT adds a "LL" suffix to the string representation of an
+      -- int64
+      return string.sub(tostring(wrapper), 1, -3)
+   end
 end
 
 
@@ -166,8 +212,6 @@ end
 function cv_methods:to_json()
    return self.raw:to_json()
 end
-
-cv_metamethods.__tostring = cv_methods.to_json
 
 function cv_methods:cmp(other)
    return self.raw:cmp(other.raw)
@@ -257,6 +301,16 @@ function new_compound_wrapper(schema)
          end
       end
 
+      function class:tostring()
+         local elements = {}
+         for _, element in self:iterate() do
+            table.insert(elements, wrapper_tostring(child_wrapper, element))
+         end
+         return "["..table.concat(elements, ", ").."]"
+      end
+
+      mt.__tostring = class.tostring
+
       function mt:__index(idx)
          -- First try a class method.
          local result = class[idx]
@@ -319,6 +373,19 @@ function new_compound_wrapper(schema)
          end
       end
 
+      function class:tostring()
+         local elements = {}
+         for key, element in self:iterate() do
+            local entry =
+               string.format("%q: %s", key,
+                             wrapper_tostring(child_wrapper, element))
+            table.insert(elements, entry)
+         end
+         return "{"..table.concat(elements, ", ").."}"
+      end
+
+      mt.__tostring = class.tostring
+
       function mt:__index(idx)
          -- First try a class method.
          local result = class[idx]
@@ -353,27 +420,7 @@ function new_compound_wrapper(schema)
          real_indices[field_name] = i
       end
 
-      function class:get(index)
-         local child, err = self.raw:get(index)
-         if not child then return child, err end
-         local child_wrapper =
-            wrappers[real_index].get(child, self.children[real_index])
-         self.children[real_index] = child_wrapper
-         return child_wrapper
-      end
-
-      function class:set(index)
-         local child, err = self.raw:set(index)
-         if not child then return child, err end
-         wrappers[index].set(child, val)
-      end
-
-      function mt:__index(idx)
-         -- First try a class method.
-         local result = class[idx]
-         if result then return result end
-
-         -- Otherwise see if there's a field with this name or index.
+      function class:get(idx)
          local real_index = real_indices[idx]
          if real_index then
             local child, err = self.raw:get(real_index)
@@ -385,6 +432,36 @@ function new_compound_wrapper(schema)
          else
             return nil, "No field "..tostring(idx)
          end
+      end
+
+      function class:set(index)
+         local child, err = self.raw:set(index)
+         if not child then return child, err end
+         wrappers[index].set(child, val)
+      end
+
+      function class:tostring()
+         local field_str = {}
+         for i, field_table in ipairs(fields) do
+            local field_name, _ = next(field_table)
+            local child = self:get(i)
+            local entry =
+               string.format("%s: %s", field_name,
+                             wrapper_tostring(wrappers[i], child))
+            table.insert(field_str, entry)
+         end
+         return "{"..table.concat(field_str, ", ").."}"
+      end
+
+      mt.__tostring = class.tostring
+
+      function mt:__index(idx)
+         -- First try a class method.
+         local result = class[idx]
+         if result then return result end
+
+         -- Otherwise see if there's a field with this name or index.
+         return class.get(self, idx)
       end
 
       function mt:__newindex(idx, val)
@@ -444,6 +521,19 @@ function new_compound_wrapper(schema)
       function class:discriminant()
          return self.raw:discriminant()
       end
+
+      function class:tostring()
+         local branch_name = self.raw:discriminant()
+         if branch_name == "null" then
+            return branch_name
+         else
+            local branch = self:get()
+            return string.format("<%s> %s", branch_name,
+                                 wrapper_tostring(wrappers[branch_name], branch))
+         end
+      end
+
+      mt.__tostring = class.tostring
 
       function mt:__index(idx)
          -- First try a class method.
