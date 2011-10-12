@@ -444,7 +444,7 @@ function new_compound_wrapper(schema)
          local field_str = {}
          for i, field_table in ipairs(fields) do
             local field_name, _ = next(field_table)
-            local child = self:get(i)
+            local child = assert(self:get(i))
             local entry =
                string.format("%s: %s", field_name,
                              wrapper_tostring(wrappers[i], child))
@@ -461,7 +461,7 @@ function new_compound_wrapper(schema)
          if result then return result end
 
          -- Otherwise see if there's a field with this name or index.
-         return class.get(self, idx)
+         return assert(class.get(self, idx))
       end
 
       function mt:__newindex(idx, val)
@@ -474,11 +474,10 @@ function new_compound_wrapper(schema)
          -- Otherwise mimic the set() method
          local real_index = real_indices[idx]
          if real_index then
-            local child, err = self.raw:get(real_index)
-            if not child then return child, err end
+            local child = assert(self.raw:get(real_index))
             wrappers[real_index].set(child, val)
          else
-            return nil, "No field "..tostring(idx)
+            assert("No field "..tostring(idx))
          end
       end
    end
@@ -553,14 +552,13 @@ function new_compound_wrapper(schema)
          -- Otherwise see if there's a field with this name or index.
          local real_index = real_indices[idx]
          if real_index then
-            local child, err = self.raw:set(real_index)
-            if not child then return child, err end
+            local child = assert(self.raw:set(real_index))
             local child_wrapper =
                wrappers[real_index].get(child, self.children[real_index])
             self.children[real_index] = child_wrapper
             return child_wrapper
          else
-            return nil, "No branch "..tostring(idx)
+            error("No branch "..tostring(idx))
          end
       end
 
@@ -582,11 +580,11 @@ function new_compound_wrapper(schema)
          -- Otherwise mimic the set() method
          local real_index = real_indices[idx]
          if real_index then
-            local child, err = self.raw:set(real_index)
+            local child = assert(self.raw:set(real_index))
             if not child then return child, err end
             wrappers[real_index].set(child, val)
          else
-            return nil, "No field "..tostring(idx)
+            error("No field "..tostring(idx))
          end
       end
    end
