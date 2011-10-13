@@ -141,6 +141,32 @@ l_value_schema_name(lua_State *L)
 
 
 /**
+ * Returns the size of the value.
+ */
+
+static int
+l_value_size(lua_State *L)
+{
+    avro_value_t  *value = lua_avro_get_value(L, 1);
+
+    switch (avro_value_get_type(value)) {
+        case AVRO_ARRAY:
+        case AVRO_MAP:
+            {
+                size_t  size;
+                check(avro_value_get_size(value, &size));
+                lua_pushnumber(L, size);
+                return 1;
+            }
+
+        default:
+            lua_pushliteral(L, "Can only get size of array or map");
+            return lua_error(L);
+    }
+}
+
+
+/**
  * Returns the name of the current union branch.
  */
 
@@ -1271,8 +1297,7 @@ l_schema_new_wrapped_value(lua_State *L)
     lua_rawget(L, -2);
     lua_replace(L, -2);
     lua_pushvalue(L, -2);
-    lua_call(L, 1, 1);
-    lua_pushvalue(L, -2);
+    lua_call(L, 1, 2);
     return 2;
 }
 
@@ -2299,6 +2324,7 @@ static const luaL_Reg  value_methods[] =
     {"set_dest", l_value_set_dest},
     {"set_from_ast", l_value_set_from_ast},
     {"set_source", l_value_set_source},
+    {"size", l_value_size},
     {"to_json", l_value_tostring},
     {"type", l_value_type},
     {NULL, NULL}

@@ -532,8 +532,7 @@ end
 
 function Schema_class:new_wrapped_value()
    local raw = self:new_raw_value()
-   local wrapped = AW.get_wrapper(raw)
-   return wrapped, raw
+   return AW.get_wrapper(raw)
 end
 
 function Schema_class:raw()
@@ -1158,6 +1157,28 @@ function Value_class:add(key)
    if rc ~= 0 then avro_error() end
 
    return element
+end
+
+function Value_class:size()
+   local value_type = self:type()
+   if value_type == ARRAY then
+      if self.iface.get_size == nil then
+         error "no implementation for get_size"
+      end
+      local rc = self.iface.get_size(self.iface, self.self, v_size)
+      if rc ~= 0 then avro_error() end
+      return tonumber(v_size[0])
+   elseif value_type == MAP then
+      local size = ffi.new(int64_t_ptr)
+      if self.iface.get_bytes == nil then
+         error "No implementation for get_bytes"
+      end
+      local rc = self.iface.get_bytes(self.iface, self.self, v_const_void_p, v_size)
+      if rc ~= 0 then avro_error() end
+      return ffi.string(v_const_void_p[0], v_size[0])
+   else
+      error("Can only get size of array or map")
+   end
 end
 
 function Value_class:discriminant_index()
