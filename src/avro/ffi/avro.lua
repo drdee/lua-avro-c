@@ -16,7 +16,6 @@
 local ffi = require "ffi"
 
 local ACC = require "avro.constants"
-local AW = require "avro.wrapper"
 
 local assert = assert
 local error = error
@@ -530,55 +529,12 @@ function Schema_class:new_raw_value()
    return value
 end
 
-function Schema_class:new_wrapped_value()
-   local raw = self:new_raw_value()
-   local wrapped = AW.get_wrapper(raw)
-   return wrapped, raw
-end
-
 function Schema_class:raw()
    return self.schema
 end
 
-local uintptr_t = ffi.typeof [[ uintptr_t ]]
-function Schema_class:id()
-   return tostring(ffi.cast(uintptr_t, self.schema))
-end
-
 function Schema_class:type()
    return self.schema[0].type
-end
-
-function Schema_class:name()
-   return ffi.string(avro.avro_schema_type_name(self.schema))
-end
-
-function Schema_class:size()
-   local schema_type = self:type()
-   if schema_type == FIXED then
-      return tonumber(avro.avro_schema_fixed_size(self.schema))
-   elseif schema_type == RECORD then
-      return tonumber(avro.avro_schema_record_size(self.schema))
-   elseif schema_type == UNION then
-      return tonumber(avro.avro_schema_union_size(self.schema))
-   else
-      error("Can only get the size of a fixed, record, or union schema")
-   end
-end
-
-function Schema_class:to_json()
-   avro.avro_writer_memory_set_dest(memory_writer, static_buf, static_size)
-   local rc = avro.avro_schema_to_json(self.schema, memory_writer)
-   if rc ~= 0 then avro_error() end
-   local length = avro.avro_writer_tell(memory_writer)
-   return ffi.string(static_buf, length)
-end
-
-Schema_mt.__tostring = Schema_class.to_json
-
-function Schema_mt:__eq(other)
-   if not other then return false end
-   return avro.avro_schema_equal(self.schema, other.schema)
 end
 
 function Schema_mt:__gc()
@@ -631,174 +587,6 @@ end
 
 LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 
--- Arrays
-
-function ArraySchema(items)
-   local schema = avro.avro_schema_array(items.schema)
-   if schema == nil then avro_error() end
-   return new_schema(schema)
-end
-
-function Schema_class:item_schema()
-   local schema = avro.avro_schema_array_items(self.schema)
-   if schema == nil then avro_error() end
-   avro.avro_schema_incref(schema)
-   return new_schema(schema)
-end
-
--- Enums
-
-function EnumSchema(name)
-   local schema = avro.avro_schema_enum(name)
-   if schema == nil then avro_error() end
-   return new_schema(schema)
-end
-
-function Schema_class:append_symbol(name)
-   local rc =
-      avro.avro_schema_enum_symbol_append(self.schema, name)
-   if rc ~= 0 then avro_error() end
-end
-
--- Fixeds
-
-function FixedSchema(name, size)
-   local schema = avro.avro_schema_fixed(name, size)
-   if schema == nil then avro_error() end
-   return new_schema(schema)
-end
-
--- Maps
-
-function MapSchema(values)
-   local schema = avro.avro_schema_map(values.schema)
-   if schema == nil then avro_error() end
-   return new_schema(schema)
-end
-
-function Schema_class:value_schema()
-   local schema = avro.avro_schema_map_values(self.schema)
-   if schema == nil then avro_error() end
-   avro.avro_schema_incref(schema)
-   return new_schema(schema)
-end
-
--- Records
-
-function RecordSchema(name)
-   local schema = avro.avro_schema_record(name, nil)
-   if schema == nil then avro_error() end
-   return new_schema(schema)
-end
-
-function Schema_class:append_field(name, field_schema)
-   local rc =
-      avro.avro_schema_record_field_append(self.schema, name,
-                                           field_schema.schema)
-   if rc ~= 0 then avro_error() end
-end
-
-function Schema_class:fields()
-   if self:type() ~= RECORD then
-      error("Only record schemas have fields")
-   end
-
-   local result = {}
-   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
-   for i = 1,field_count do
-      local name = avro.avro_schema_record_field_name(self.schema, i-1)
-      name = ffi.string(name)
-      local field_schema =
-         avro.avro_schema_record_field_get_by_index(self.schema, i-1)
-      avro.avro_schema_incref(field_schema)
-      table.insert(result, { [name] = new_schema(field_schema) })
-   end
-
-   return result
-end
-
-function Schema_class:field_names()
-   if self:type() ~= RECORD then
-      error("Only record schemas have fields")
-   end
-
-   local result = {}
-   local field_count = tonumber(avro.avro_schema_record_size(self.schema))
-   for i = 1,field_count do
-      local name = avro.avro_schema_record_field_name(self.schema, i-1)
-      name = ffi.string(name)
-      table.insert(result, name)
-   end
-
-   return result
-end
-
--- Unions
-
-function UnionSchema(items)
-   local schema = avro.avro_schema_union()
-   if schema == nil then avro_error() end
-   return new_schema(schema)
-end
-
-function Schema_class:append_branch(branch_schema)
-   local rc =
-      avro.avro_schema_union_append(self.schema, branch_schema.schema)
-   if rc ~= 0 then avro_error() end
-end
-
-function Schema_class:branches()
-   if self:type() ~= UNION then
-      error("Only union schemas have branches")
-   end
-
-   local result = {}
-   local branch_count = tonumber(avro.avro_schema_union_size(self.schema))
-   for i = 1,branch_count do
-      local branch_schema =
-         avro.avro_schema_union_branch(self.schema, i-1)
-      local name = avro.avro_schema_type_name(branch_schema)
-      name = ffi.string(name)
-      avro.avro_schema_incref(branch_schema)
-      table.insert(result, { [name] = new_schema(branch_schema) })
-   end
-
-   return result
-end
-
-function Schema_class:branch_names()
-   if self:type() ~= union then
-      error("Only union schemas have branches")
-   end
-
-   local result = {}
-   local branch_count = tonumber(avro.avro_schema_union_size(self.schema))
-   for i = 1,branch_count do
-      local branch_schema =
-         avro.avro_schema_union_branch(self.schema, i-1)
-      local name = avro.avro_schema_type_name(self.schema)
-      name = ffi.string(name)
-      table.insert(result, name)
-   end
-
-   return result
-end
-
--- Links
-
-function LinkSchema(target)
-   local schema = avro.avro_schema_link(target.schema)
-   if schema == nil then avro_error() end
-   return new_schema(schema)
-end
-
-function Schema_class:link_target()
-   local schema = avro.avro_schema_link_target(self.schema)
-   if schema == nil then avro_error() end
-   avro.avro_schema_incref(schema)
-   return new_schema(schema)
-end
-
 
 ------------------------------------------------------------------------
 -- Values
@@ -823,10 +611,6 @@ function raw_value(v_ud, should_decref)
    self.self = ud.self
    self.should_decref = should_decref or false
    return self
-end
-
-function wrapped_value(v_ud, should_decref)
-   return AW.get_wrapper(raw_value(v_ud, should_decref))
 end
 
 function Value_class:get(index)
@@ -1160,6 +944,28 @@ function Value_class:add(key)
    return element
 end
 
+function Value_class:size()
+   local value_type = self:type()
+   if value_type == ARRAY then
+      if self.iface.get_size == nil then
+         error "no implementation for get_size"
+      end
+      local rc = self.iface.get_size(self.iface, self.self, v_size)
+      if rc ~= 0 then avro_error() end
+      return tonumber(v_size[0])
+   elseif value_type == MAP then
+      local size = ffi.new(int64_t_ptr)
+      if self.iface.get_bytes == nil then
+         error "No implementation for get_bytes"
+      end
+      local rc = self.iface.get_bytes(self.iface, self.self, v_const_void_p, v_size)
+      if rc ~= 0 then avro_error() end
+      return ffi.string(v_const_void_p[0], v_size[0])
+   else
+      error("Can only get size of array or map")
+   end
+end
+
 function Value_class:discriminant_index()
    if self:type() ~= UNION then
       error("Can't get discriminant of a non-union value")
@@ -1361,18 +1167,6 @@ function Value_class:hash()
    return avro.avro_value_hash(self)
 end
 
-function Value_class:schema()
-   local schema = self.iface.get_schema(self.iface, self.self)
-   if schema[0].type == LINK then
-      local target = avro.avro_schema_link_target(schema)
-      avro.avro_schema_incref(target)
-      return new_schema(target)
-   else
-      avro.avro_schema_incref(schema)
-      return new_schema(schema)
-   end
-end
-
 function Value_class:schema_name()
    local schema = self.iface.get_schema(self.iface, self.self)
    return ffi.string(avro.avro_schema_type_name(schema))
@@ -1409,7 +1203,14 @@ end
 
 Value_mt.__tostring = Value_class.to_json
 
+function Value_class:cmp(other)
+   return avro.avro_value_cmp(self, other)
+end
+
 function Value_mt:__eq(other)
+   if other == nil then
+      return false
+   end
    local eq = avro.avro_value_equal(self, other)
    return eq ~= 0
 end
@@ -1468,7 +1269,9 @@ end
 
 function ResolvedReader(wschema, rschema)
    local resolver = LuaAvroResolvedReader()
-   resolver.resolver = avro.avro_resolved_reader_new(wschema.schema, rschema.schema)
+   wschema = wschema:raw_schema().schema
+   rschema = rschema:raw_schema().schema
+   resolver.resolver = avro.avro_resolved_reader_new(wschema, rschema)
    if resolver.resolver == nil then return get_avro_error() end
    return resolver
 end
@@ -1521,7 +1324,9 @@ end
 
 function ResolvedWriter(wschema, rschema)
    local resolver = LuaAvroResolvedWriter()
-   resolver.resolver = avro.avro_resolved_writer_new(wschema.schema, rschema.schema)
+   wschema = wschema:raw_schema().schema
+   rschema = rschema:raw_schema().schema
+   resolver.resolver = avro.avro_resolved_writer_new(wschema, rschema)
    if resolver.resolver == nil then return get_avro_error() end
    local rc = avro.avro_resolved_writer_new_value(resolver.resolver, resolver.value)
    if rc ~= 0 then return get_avro_error() end
@@ -1544,8 +1349,12 @@ local function new_input_file(reader)
    return l_reader
 end
 
-function DataInputFile_class:schema()
-   return new_schema(avro.avro_schema_incref(self.wschema))
+function DataInputFile_class:schema_json()
+   avro.avro_writer_memory_set_dest(memory_writer, static_buf, static_size)
+   local rc = avro.avro_schema_to_json(self.wschema, memory_writer)
+   if rc ~= 0 then avro_error() end
+   local length = avro.avro_writer_tell(memory_writer)
+   return ffi.string(static_buf, length)
 end
 
 function DataInputFile_class:read_raw(value)
@@ -1614,7 +1423,8 @@ function open(path, mode, schema)
 
    elseif mode == "w" then
       local writer = ffi.new(avro_file_writer_t_ptr)
-      local rc = avro.avro_file_writer_create(path, schema.schema, writer)
+      schema = schema:raw_schema().schema
+      local rc = avro.avro_file_writer_create(path, schema, writer)
       if rc ~= 0 then avro_error() end
       return LuaAvroDataOutputFile(writer[0])
 

@@ -40,7 +40,7 @@ end
 
 do
    local function test_parse(json, expected)
-      local schema = A.Schema(json)
+      local schema = A.Schema:new(json)
       local actual = schema:type()
       assert(actual == expected)
    end
@@ -64,19 +64,19 @@ end
 
 do
    local function test_array(prim_type, expected)
-      local items_schema = A.Schema([[{"type": "]]..prim_type..[["}]])
-      local schema = A.ArraySchema(items_schema)
-      local array = schema:new_wrapped_value()
+      local items_schema = A.Schema:new([[{"type": "]]..prim_type..[["}]])
+      local schema = A.ArraySchema:new(items_schema)
+      local _, array = schema:new_wrapped_value()
       for _,val in ipairs(expected) do
          array:append(val)
       end
-      local array2 = schema:new_wrapped_value()
+      local _, array2 = schema:new_wrapped_value()
       array2:copy_from(array)
       local actual = {}
       for _,element in array:iterate() do
          table.insert(actual, element)
       end
-      local array3 = schema:new_wrapped_value()
+      local _, array3 = schema:new_wrapped_value()
       array3:set_from_ast(expected)
       assert(deepcompare(actual, expected))
       assert(array == array2)
@@ -99,18 +99,18 @@ end
 
 do
    local function test_map(prim_type, expected)
-      local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
-      local map = schema:new_wrapped_value()
+      local schema = A.Schema:new([[{"type": "map", "values": "]]..prim_type..[["}]])
+      local _, map = schema:new_wrapped_value()
       for key,val in pairs(expected) do
          map:set(key, val)
       end
-      local map2 = schema:new_wrapped_value()
+      local _, map2 = schema:new_wrapped_value()
       map2:copy_from(map)
       local actual = {}
       for key,element in map:iterate() do
          actual[key] = element
       end
-      local map3 = schema:new_wrapped_value()
+      local _, map3 = schema:new_wrapped_value()
       map3:set_from_ast(expected)
       assert(deepcompare(actual, expected))
       assert(map == map2)
@@ -132,7 +132,7 @@ end
 -- Records
 
 do
-   local schema = A.Schema [[
+   local schema = A.Schema:new [[
       {
          "type": "record",
          "name": "test",
@@ -145,17 +145,17 @@ do
       }
    ]]
 
-   local rec = schema:new_wrapped_value()
+   local _, rec = schema:new_wrapped_value()
    rec.i = 1
    rec.b = true
    rec.s = "fantastic"
    rec.ls:append(1)
    rec.ls:append(100)
 
-   local rec2 = schema:new_wrapped_value()
+   local _, rec2 = schema:new_wrapped_value()
    rec2:copy_from(rec)
 
-   local rec3 = schema:new_wrapped_value()
+   local _, rec3 = schema:new_wrapped_value()
    rec3:set_from_ast {
       i = 1,
       b = true,
@@ -175,7 +175,7 @@ end
 -- Unions
 
 do
-   local schema = A.Schema [[
+   local schema = A.Schema:new [[
       [
          "null", "int",
          { "type": "record", "name": "test",
@@ -183,9 +183,9 @@ do
       ]
    ]]
 
-   local union = schema:new_wrapped_value()
-   local union2 = schema:new_wrapped_value()
-   local union3 = schema:new_wrapped_value()
+   local _, union = schema:new_wrapped_value()
+   local _, union2 = schema:new_wrapped_value()
+   local _, union3 = schema:new_wrapped_value()
 
    union.null = nil
    union2:copy_from(union)
@@ -215,8 +215,8 @@ end
 
 do
    local function test_good_scalar(json1, json2, scalar)
-      local schema1 = A.Schema([[{"type": "]]..json1..[["}]])
-      local schema2 = A.Schema([[{"type": "]]..json2..[["}]])
+      local schema1 = A.Schema:new([[{"type": "]]..json1..[["}]])
+      local schema2 = A.Schema:new([[{"type": "]]..json2..[["}]])
       local resolver = assert(A.ResolvedReader(schema1, schema2))
 
       local raw_value = schema1:new_raw_value()
@@ -224,7 +224,9 @@ do
       raw_resolved:set_source(raw_value)
 
       raw_value:set(scalar)
-      local wrapped_resolved = A.get_wrapper(raw_resolved)
+      local wrapper_class = schema2:wrapper_class()
+      local wrapper = wrapper_class:new()
+      local wrapped_resolved = wrapper:wrap(raw_resolved)
       assert(wrapped_resolved == scalar)
       raw_value:release()
       raw_resolved:release()
@@ -233,7 +235,7 @@ do
    test_good_scalar("int", "int", 42)
    test_good_scalar("int", "long", 42)
 
-   local schema1 = A.Schema [[
+   local schema1 = A.Schema:new [[
      {
        "type": "record",
        "name": "foo",
@@ -244,7 +246,7 @@ do
      }
    ]]
 
-   local schema2 = A.Schema [[
+   local schema2 = A.Schema:new [[
      {
        "type": "record",
        "name": "foo",
@@ -256,25 +258,25 @@ do
 
    local resolver = assert(A.ResolvedReader(schema1, schema2))
 
-   local val1, raw1 = schema1:new_wrapped_value()
+   local _, val1 = schema1:new_wrapped_value()
    val1.a = 1
    val1.b = 42
 
-   local val2, raw2 = schema1:new_wrapped_value()
+   local _, val2 = schema1:new_wrapped_value()
    val2.a = 1
    val2.b = 100
 
    local resolved1 = resolver:new_raw_value()
-   resolved1:set_source(raw1)
+   resolved1:set_source(val1.raw)
 
    local resolved2 = resolver:new_raw_value()
-   resolved2:set_source(raw2)
+   resolved2:set_source(val2.raw)
 
    assert(val1 ~= val2)
    assert(resolved1 == resolved2)
 
-   raw1:release()
-   raw2:release()
+   val1:release()
+   val2:release()
    resolved1:release()
    resolved2:release()
 end
@@ -284,8 +286,8 @@ end
 
 do
    local function test_good_resolver(json1, json2)
-      local schema1 = A.Schema(json1)
-      local schema2 = A.Schema(json2)
+      local schema1 = A.Schema:new(json1)
+      local schema2 = A.Schema:new(json2)
       local resolver = assert(A.ResolvedWriter(schema1, schema2))
    end
 
@@ -295,8 +297,8 @@ do
    end
 
    local function test_bad_resolver(json1, json2)
-      local schema1 = A.Schema(json1)
-      local schema2 = A.Schema(json2)
+      local schema1 = A.Schema:new(json1)
+      local schema2 = A.Schema:new(json2)
       local resolver = assert(not A.ResolvedWriter(schema1, schema2))
    end
 
@@ -341,11 +343,13 @@ end
 
 do
    local function test_boolean(buf, expected_prim)
-      local schema = A.Schema([[{"type": "boolean"}]])
+      local schema = A.Schema:new([[{"type": "boolean"}]])
       local raw_actual = schema:new_raw_value()
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, raw_actual))
-      local actual = A.get_wrapper(raw_actual)
+      local wrapper_class = schema:wrapper_class()
+      local wrapper = wrapper_class:new()
+      local actual = wrapper:wrap(raw_actual)
       assert(actual == expected_prim)
       raw_actual:release()
    end
@@ -354,11 +358,13 @@ do
    test_boolean("\001", true)
 
    local function test_int(buf, expected_prim)
-      local schema = A.Schema([[{"type": "int"}]])
+      local schema = A.Schema:new([[{"type": "int"}]])
       local raw_actual = schema:new_raw_value()
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, raw_actual))
-      local actual = A.get_wrapper(raw_actual)
+      local wrapper_class = schema:wrapper_class()
+      local wrapper = wrapper_class:new()
+      local actual = wrapper:wrap(raw_actual)
       assert(actual == expected_prim)
       raw_actual:release()
    end
@@ -373,9 +379,12 @@ end
 
 do
    local function test_boolean(expected_buf, prim_value)
-      local schema = A.Schema([[{"type": "boolean"}]])
+      local schema = A.Schema:new([[{"type": "boolean"}]])
       local raw_value = schema:new_raw_value()
-      A.set_wrapper(raw_value, prim_value)
+      local wrapper_class = schema:wrapper_class()
+      local wrapper = wrapper_class:new()
+      wrapper:wrap(raw_value)
+      wrapper:fill_from(prim_value)
       local actual_buf = assert(raw_value:encode())
       assert(actual_buf == expected_buf)
       raw_value:release()
@@ -385,9 +394,12 @@ do
    test_boolean("\001", true)
 
    local function test_int(expected_buf, prim_value)
-      local schema = A.Schema([[{"type": "int"}]])
+      local schema = A.Schema:new([[{"type": "int"}]])
       local raw_value = schema:new_raw_value()
-      A.set_wrapper(raw_value, prim_value)
+      local wrapper_class = schema:wrapper_class()
+      local wrapper = wrapper_class:new()
+      wrapper:wrap(raw_value)
+      wrapper:fill_from(prim_value)
       local actual_buf = assert(raw_value:encode())
       assert(actual_buf == expected_buf)
       raw_value:release()
@@ -405,7 +417,7 @@ do
    local expected = {1,2,3,4,5,6,7,8,9,10}
 
    local filename = "test-data.avro"
-   local schema = A.Schema([[{"type": "int"}]])
+   local schema = A.Schema:new([[{"type": "int"}]])
    local writer = A.open(filename, "w", schema)
    local raw_value = schema:new_raw_value()
 
@@ -425,7 +437,9 @@ do
    actual = {}
    raw_value = reader:read_raw()
    while raw_value do
-      local value = A.get_wrapper(raw_value)
+      local wrapper_class = schema:wrapper_class()
+      local wrapper = wrapper_class:new()
+      local value = wrapper:wrap(raw_value)
       table.insert(actual, value)
       raw_value:release()
       raw_value = reader:read_raw()
@@ -438,7 +452,9 @@ do
    raw_value = schema:new_raw_value()
    local ok = reader:read_raw(raw_value)
    while ok do
-      local value = A.get_wrapper(raw_value)
+      local wrapper_class = schema:wrapper_class()
+      local wrapper = wrapper_class:new()
+      local value = wrapper:wrap(raw_value)
       table.insert(actual, value)
       ok = reader:read_raw(raw_value)
    end
@@ -465,7 +481,9 @@ do
    raw0:get("tail"):get():get("tail"):set("null")
 
    local raw1 = schema:new_raw_value()
-   local wrap1 = A.get_wrapper(raw1)
+   local wrapper_class = schema:wrapper_class()
+   local wrapper = wrapper_class:new()
+   local wrap1 = wrapper:wrap(raw1)
    wrap1.head = 0
    wrap1.tail.list.head = 1
    wrap1.tail.list.tail.null = nil

@@ -40,15 +40,14 @@ end
 
 do
    local function test_parse(json, expected)
-      local schema = A.Schema(json)
+      local schema = A.Schema:new(json)
       local actual = schema:type()
       assert(actual == expected)
    end
 
    local function test_prim(prim_type, expected)
       test_parse([[{"type": "]]..prim_type..[["}]], expected)
-      test_parse(prim_type, expected)
-      test_parse(A[prim_type], expected)
+      test_parse([["]]..prim_type..[["]], expected)
    end
 
    test_prim("boolean", A.BOOLEAN)
@@ -71,7 +70,7 @@ do
       {b = A.boolean},
    }
 
-   assert(deepcompare(r:fields(), {
+   assert(deepcompare(r.fields, {
       {i = A.int},
       {l = A.long},
       {b = A.boolean},
@@ -102,6 +101,7 @@ do
                { "type": "map", "values": "float" }},
             {"name": "ipv4", "type":
                { "type": "fixed", "name": "ipv4", "size": 4 }},
+            {"name": "dest_ipv4", "type": "ipv4"},
             {"name": "ipv6", "type":
                { "type": "fixed", "name": "ipv6", "size": 16 }},
             {"name": "u", "type": ["null", "string", "double"]},
@@ -121,14 +121,15 @@ do
       }
    ]]
 
-   local schema1 = A.Schema(json)
+   local schema1 = A.Schema:new(json)
    local schema2 = A.record "test" {
-      {i = "int"},
-      {l = [[ {"type": "long"} ]]},
+      {i = A.int},
+      {l = A.Schema:new([[ {"type": "long"} ]])},
       {e = A.enum "color" {"RED","GREEN","BLUE"} },
       {a = A.array { A.double }},
       {m = A.map(A.float)},
       {ipv4 = A.fixed "ipv4" {size=4}},
+      {dest_ipv4 = A.fixed "ipv4" {size=4}},
       {ipv6 = A.fixed "ipv6"(16)},
       {u = A.union {A.null, A.string, A.double}},
       {sub = A.record "subtest" {
@@ -141,10 +142,10 @@ do
    --print(schema1)
    --print(schema2)
    assert(schema1 == schema2)
-   assert(schema1:size() == 11)
+   assert(schema1:size() == 12)
 
    assert(deepcompare(schema1:field_names(), {
-      "i", "l", "e", "a", "m", "ipv4", "ipv6",
+      "i", "l", "e", "a", "m", "ipv4", "dest_ipv4", "ipv6",
       "u", "sub", "children", "parent",
    }))
 end

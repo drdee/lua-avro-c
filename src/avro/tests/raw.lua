@@ -40,8 +40,8 @@ end
 
 do
    local function test_array(prim_type, expected)
-      local items_schema = A.Schema([[{"type": "]]..prim_type..[["}]])
-      local schema = A.ArraySchema(items_schema)
+      local items_schema = A.Schema:new([[{"type": "]]..prim_type..[["}]])
+      local schema = A.ArraySchema:new(items_schema)
       local array = schema:new_raw_value()
       for _,val in ipairs(expected) do
          local element = array:append()
@@ -77,7 +77,7 @@ end
 
 do
    local function test_map(prim_type, expected)
-      local schema = A.Schema([[{"type": "map", "values": "]]..prim_type..[["}]])
+      local schema = A.Schema:new([[{"type": "map", "values": "]]..prim_type..[["}]])
       local map = schema:new_raw_value()
       local first_key
       for key,val in pairs(expected) do
@@ -147,7 +147,7 @@ end
 -- Records
 
 do
-   local schema = A.Schema [[
+   local schema = A.Schema:new [[
       {
          "type": "record",
          "name": "test",
@@ -190,7 +190,7 @@ end
 -- Unions
 
 do
-   local schema = A.Schema [[
+   local schema = A.Schema:new [[
       [
          "null", "int",
          { "type": "record", "name": "test",
@@ -276,8 +276,8 @@ end
 
 do
    local function test_good_scalar(json1, json2, scalar)
-      local schema1 = A.Schema([[{"type": "]]..json1..[["}]])
-      local schema2 = A.Schema([[{"type": "]]..json2..[["}]])
+      local schema1 = A.Schema:new([[{"type": "]]..json1..[["}]])
+      local schema2 = A.Schema:new([[{"type": "]]..json2..[["}]])
       local resolver = assert(A.ResolvedReader(schema1, schema2))
 
       local value = schema1:new_raw_value()
@@ -293,7 +293,7 @@ do
    test_good_scalar("int", "int", 42)
    test_good_scalar("int", "long", 42)
 
-   local schema1 = A.Schema [[
+   local schema1 = A.Schema:new [[
      {
        "type": "record",
        "name": "foo",
@@ -304,7 +304,7 @@ do
      }
    ]]
 
-   local schema2 = A.Schema [[
+   local schema2 = A.Schema:new [[
      {
        "type": "record",
        "name": "foo",
@@ -344,8 +344,8 @@ end
 
 do
    local function test_good_resolver(json1, json2)
-      local schema1 = A.Schema(json1)
-      local schema2 = A.Schema(json2)
+      local schema1 = A.Schema:new(json1)
+      local schema2 = A.Schema:new(json2)
       local resolver = assert(A.ResolvedWriter(schema1, schema2))
    end
 
@@ -355,8 +355,8 @@ do
    end
 
    local function test_bad_resolver(json1, json2)
-      local schema1 = A.Schema(json1)
-      local schema2 = A.Schema(json2)
+      local schema1 = A.Schema:new(json1)
+      local schema2 = A.Schema:new(json2)
       local resolver = assert(not A.ResolvedWriter(schema1, schema2))
    end
 
@@ -401,7 +401,7 @@ end
 
 do
    local function test_boolean(buf, expected_prim)
-      local schema = A.Schema([[{"type": "boolean"}]])
+      local schema = A.Schema:new([[{"type": "boolean"}]])
       local actual = schema:new_raw_value()
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
@@ -413,7 +413,7 @@ do
    test_boolean("\001", true)
 
    local function test_int(buf, expected_prim)
-      local schema = A.Schema([[{"type": "int"}]])
+      local schema = A.Schema:new([[{"type": "int"}]])
       local actual = schema:new_raw_value()
       local resolver = assert(A.ResolvedWriter(schema, schema))
       assert(resolver:decode(buf, actual))
@@ -431,7 +431,7 @@ end
 
 do
    local function test_boolean(expected_buf, prim_value)
-      local schema = A.Schema([[{"type": "boolean"}]])
+      local schema = A.Schema:new([[{"type": "boolean"}]])
       local value = schema:new_raw_value()
       value:set(prim_value)
       local actual_buf = assert(value:encode())
@@ -443,7 +443,7 @@ do
    test_boolean("\001", true)
 
    local function test_int(expected_buf, prim_value)
-      local schema = A.Schema([[{"type": "int"}]])
+      local schema = A.Schema:new([[{"type": "int"}]])
       local actual = schema:new_raw_value()
       local value = schema:new_raw_value()
       value:set(prim_value)
@@ -465,7 +465,7 @@ do
    local expected = {1,2,3,4,5,6,7,8,9,10}
 
    local filename = "test-data.avro"
-   local schema = A.Schema([[{"type": "int"}]])
+   local schema = A.Schema:new([[{"type": "int"}]])
    local writer = A.open(filename, "w", schema)
    local value = schema:new_raw_value()
 

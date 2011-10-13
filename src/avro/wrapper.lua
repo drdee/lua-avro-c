@@ -16,10 +16,15 @@ local ipairs = ipairs
 local next = next
 local pairs = pairs
 local print = print
-local rawget = rawget
+local rawequal = rawequal
+local rawset = rawset
 local setmetatable = setmetatable
+local string = string
+local table = table
 local tostring = tostring
 local type = type
+
+local ffi_present = pcall(require, "ffi")
 
 module "avro.wrapper"
 
@@ -39,15 +44,27 @@ module "avro.wrapper"
 -- as "value.ages[2]", and have the result be a Lua number.
 --
 -- In addition to these default wrappers, you can install your own
--- wrapper classes.  A wrapper is defined by a table containing two
+-- wrapper classes.  A wrapper is defined by a subclass of the
+-- predefined Wrapper class.  You should override the following
 -- functions:
 --
---   get(raw_value)
---     Return a wrapper instance for the given raw value.
+--   new_wrapper()
+--     Return a new, empty wrapper instance for the given raw value.
 --
---   set(raw_value, value)
---     Set the contents of the given raw value.  This should work when
---     "value" is a wrapped value instance or an arbitrary Lua value.
+--   wrap(raw_value)
+--     Causes self.wrapped (a wrapper instance) to wrap the given raw Avro
+--     value.  The function should always return the wrapper instance,
+--     which does not have to be the same as self.
+--
+--   fill_from(wrapper)
+--     Fills in the current raw Avro value with the contents of the
+--     wrapper instance.  (If the wrapper instance is already directly
+--     wrapping that raw value, then you don't need to do anything.)
+--     wrapper can also be an arbitrary Lua value, in which case you
+--     should pass in self to raw_value:set_from_ast().
+--
+--   tostring()
+--     Returns a human-readable string description of the wrapped value.
 --
 -- Each wrapper class is associated with a named Avro schema.  This
 -- means that there can only be a single wrapper class for any of the
@@ -60,433 +77,510 @@ module "avro.wrapper"
 ------------------------------------------------------------------------
 -- Wrapper dispatch table
 
-local scalar_types_array = {
-   ACC.BOOLEAN, ACC.BYTES, ACC.DOUBLE, ACC.FLOAT, ACC.INT,
-   ACC.LONG, ACC.NULL, ACC.STRING, ACC.ENUM, ACC.FIXED,
-}
-local scalar_types = {}
-for _,v in ipairs(scalar_types_array) do scalar_types[v] = true end
-
--- These will be filled in below
-local CompoundValue = {}
-local ScalarValue = {}
-
 local WRAPPERS = {}
 
-function get_wrapper_class(schema)
-   local wrapper = WRAPPERS[schema:name()]
-
-   if not wrapper then
-      if scalar_types[schema:type()] then
-         wrapper = ScalarValue
-      else
-         wrapper = new_compound_wrapper(schema)
-      end
-   end
-
-   return wrapper
+function get_wrapper_class(schema_name)
+   return WRAPPERS[schema_name]
 end
 
 function set_wrapper_class(schema_name, wrapper)
    WRAPPERS[schema_name] = wrapper
 end
 
-function get_wrapper(raw_value)
-   return get_wrapper_class(raw_value:schema()).get(raw_value)
+
+------------------------------------------------------------------------
+-- Wrapper superclass
+
+Wrapper = {}
+Wrapper.__name = "Wrapper"
+Wrapper.__mt = { __class=Wrapper, __index=Wrapper }
+
+local function get_class(self)
+   return getmetatable(self).__class
 end
 
-function set_wrapper(raw_value, value)
-   return get_wrapper_class(raw_value:schema()).set(raw_value, value)
+function Wrapper:subclass(name)
+   local class = {}
+   class.__name = name
+   class.__mt = {}
+   for k,v in pairs(self.__mt) do
+      class.__mt[k] = v
+   end
+   class.__mt.__class = class
+   if type(class.__mt.__index) == "table" then
+      class.__mt.__index = class
+   end
+   return setmetatable(class, { __index=self })
+end
+
+function Wrapper:new()
+   local obj = {
+      wrapped=self:new_wrapped(),
+   }
+   return setmetatable(obj, self.__mt)
+end
+
+function Wrapper:new_wrapped()
+   error("Don't know how to create an instance of "..self.__name)
+end
+
+function Wrapper:tostring()
+   return tostring(self.wrapped)
+end
+
+function Wrapper.__mt:__tostring()
+   return self:tostring()
+end
+
+function Wrapper:wrap(raw_value)
+   error("Don't know how to wrap raw value for "..self.__name)
+end
+
+function Wrapper:fill_from(wrapped)
+   error("Don't know how to fill in raw value for "..self.__name)
 end
 
 
 ------------------------------------------------------------------------
--- Default scalar value wrapper
+-- Default scalar value wrappers
 
-function ScalarValue.get(raw_value)
-   return raw_value:get()
+ScalarValue = Wrapper:subclass("ScalarValue")
+
+function ScalarValue:new_wrapped()
+   return nil
 end
 
-function ScalarValue.set(raw_value, val)
-   raw_value:set(val)
+function ScalarValue:wrap(raw_value)
+   self.raw = raw_value
+   self.wrapped = raw_value:get()
+   return self.wrapped
+end
+
+function ScalarValue:fill_from(wrapped)
+   self.raw:set(wrapped)
+   self.wrapped = wrapped
+end
+
+StringValue = Wrapper:subclass("StringValue")
+
+StringValue.new_wrapped = ScalarValue.new_wrapped
+StringValue.wrap = ScalarValue.wrap
+StringValue.fill_from = ScalarValue.fill_from
+
+function StringValue:tostring()
+   return string.format("%q", self.wrapped)
+end
+
+LongValue = Wrapper:subclass("LongValue")
+
+LongValue.new_wrapped = ScalarValue.new_wrapped
+LongValue.wrap = ScalarValue.wrap
+LongValue.fill_from = ScalarValue.fill_from
+
+if ffi_present then
+   function LongValue:tostring()
+      -- LuaJIT adds a "LL" suffix to the string representation of an
+      -- int64
+      return string.sub(tostring(self.wrapped), 1, -3)
+   end
 end
 
 
 ------------------------------------------------------------------------
--- Default compound value wrapper
+-- Compound value superclass
 
-local cv_methods = {}
-local cv_metamethods = {}
+CompoundValue = Wrapper:subclass("CompoundValue")
 
-function cv_methods:type()
-   return self.raw:type()
+function CompoundValue:cmp(other)
+   return self.raw:cmp(other.raw)
 end
 
-function cv_methods:get_(index)
-   return self.raw:get(index)
-end
-
-function cv_methods:set_(index)
-   return self.raw:set(index)
-end
-
-function cv_methods:set_from_ast(ast)
-   return self.raw:set_from_ast(ast)
-end
-
-function cv_methods:hash()
-   return self.raw:hash()
-end
-
-function cv_methods:reset()
-   return self.raw:reset()
-end
-
-function cv_methods:release()
-   return self.raw:release()
-end
-
-function cv_methods:copy_from(other)
+function CompoundValue:copy_from(other)
    return self.raw:copy_from(other.raw)
 end
 
-function cv_methods:to_json()
+function CompoundValue:hash()
+   return self.raw:hash()
+end
+
+function CompoundValue:release()
+   self.raw:release()
+   self.children = {}
+end
+
+function CompoundValue:reset()
+   self.raw:reset()
+   self.children = {}
+end
+
+function CompoundValue:set_from_ast(ast)
+   return self.raw:set_from_ast(ast)
+end
+
+function CompoundValue:to_json()
    return self.raw:to_json()
 end
 
-cv_metamethods.__tostring = cv_methods.to_json
+function CompoundValue:type()
+   return self.raw:type()
+end
 
-function cv_metamethods:__lt(other)
+function CompoundValue.__mt:__lt(other)
    return self.raw < other.raw
 end
 
-function cv_metamethods:__le(other)
+function CompoundValue.__mt:__le(other)
    return self.raw <= other.raw
 end
 
-function cv_metamethods:__eq(other)
+function CompoundValue.__mt:__eq(other)
    return self.raw == other.raw
+end
+
+
+function CompoundValue:new()
+   local obj = { raw=nil, children={} }
+   return setmetatable(obj, self.__mt)
+end
+
+function CompoundValue:wrap(raw_value)
+   rawset(self, "raw", raw_value)
+   return self
+end
+
+function CompoundValue:fill_from(wrapped)
+   if getmetatable(wrapped) == self.__mt then
+      if not rawequal(self.raw, wrapped.raw) then
+         self.raw:copy_from(wrapped.raw)
+      end
+   else
+      self.raw:set_from_ast(wrapped)
+   end
+end
+
+
+------------------------------------------------------------------------
+-- Array
+
+ArrayValue = CompoundValue:subclass("ArrayValue")
+
+function ArrayValue:get_child(idx)
+   if not self.children[idx] then
+      self.children[idx] = assert(self.__child_class:new())
+   end
+   return self.children[idx]
+end
+
+function ArrayValue:get(index)
+   local raw_child, err = self.raw:get(index)
+   if not raw_child then return raw_child, err end
+   local child = self:get_child(index)
+   return child:wrap(raw_child)
+end
+
+function ArrayValue:append(val)
+   local raw_child, err = self.raw:append()
+   if not raw_child then return raw_child, err end
+
+   local idx = self.raw:size()
+   local child = self:get_child(idx)
+   local wrapper = child:wrap(raw_child)
+   if val then
+      child:fill_from(val)
+   else
+      return wrapper
+   end
 end
 
 local function iterate_wrapped(state, unused)
    local k,v = state.f(state.s, state.var)
    if not k then return k,v end
    state.var = k
-   return k, state.child_wrapper.get(v)
+   local child = state.self:get_child(k)
+   return k, child:wrap(v)
 end
 
-local MEMOIZED_WRAPPERS = {}
+function ArrayValue:iterate(want_raw)
+   if want_raw then
+      return self.raw:iterate()
+   else
+      local f, s, var = self.raw:iterate()
+      local state = { f=f, s=s, var=var, self=self }
+      return iterate_wrapped, state, nil
+   end
+end
 
-function new_compound_wrapper(schema)
-   -- Links are handled specially.
-   local schema_type = schema:type()
-   if schema_type == ACC.LINK then
-      return new_compound_wrapper(schema:link_target())
+function ArrayValue:tostring()
+   local elements = {}
+   for i, _ in self:iterate() do
+      local child = self:get_child(i)
+      table.insert(elements, child:tostring())
+   end
+   return "["..table.concat(elements, ", ").."]"
+end
+
+function ArrayValue.__mt:__index(idx)
+   -- First try a class method.
+   local result = get_class(self)[idx]
+   if result then return result end
+
+   -- Otherwise mimic the get() method
+   return self:get(idx)
+end
+
+function ArrayValue.__mt:__newindex(idx, val)
+   -- If there's a class method with this name, you can't use the table
+   -- syntax.
+   if get_class(self)[idx] then
+      error("Cannot set "..tostring(idx).." with [] syntax")
    end
 
-   -- See if we've already created a wrapper for this schema.
-   local schema_id = schema:id()
-   if MEMOIZED_WRAPPERS[schema_id] then
-      return MEMOIZED_WRAPPERS[schema_id]
+   -- Otherwise mimic the non-existent set() method
+   local raw_child, err = self.raw:get(idx)
+   if not raw_child then return raw_child, err end
+   local child = self:get_child(idx)
+   child:wrap(raw_child)
+   child:fill_from(val)
+end
+
+
+------------------------------------------------------------------------
+-- Map
+
+MapValue = CompoundValue:subclass("MapValue")
+
+function MapValue:get_child(idx)
+   if not self.children[idx] then
+      self.children[idx] = assert(self.__child_class:new())
+   end
+   return self.children[idx]
+end
+
+function MapValue:get(index)
+   local raw_child, err = self.raw:get(index)
+   if not raw_child then return raw_child, err end
+   local child = self:get_child(index)
+   return child:wrap(raw_child)
+end
+
+function MapValue:add(key, val)
+   local raw_child = self.raw:add(key)
+   local child = self:get_child(key)
+   local wrapper = child:wrap(raw_child)
+   if val then
+      child:fill_from(val)
+   else
+      return wrapper
+   end
+end
+
+MapValue.set = MapValue.add
+
+function MapValue:iterate(want_raw)
+   if want_raw then
+      return self.raw:iterate()
+   else
+      local f, s, var = self.raw:iterate()
+      local state = { f=f, s=s, var=var, self=self }
+      return iterate_wrapped, state, nil
+   end
+end
+
+function MapValue:tostring()
+   local elements = {}
+   for key, _ in self:iterate() do
+      local child = self:get_child(key)
+      local entry = string.format("%q: %s", key, child:tostring())
+      table.insert(elements, entry)
+   end
+   return "{"..table.concat(elements, ", ").."}"
+end
+
+function MapValue.__mt:__index(idx)
+   -- First try a class method.
+   local result = get_class(self)[idx]
+   if result then return result end
+
+   -- Otherwise mimic the add() method
+   return self:add(idx)
+end
+
+function MapValue.__mt:__newindex(idx, val)
+   -- If there's a class method with this name, you can't use the table
+   -- syntax.
+   if get_class(self)[idx] then
+      error("Cannot set "..tostring(idx).." with [] syntax")
    end
 
-   local class = {}
-   local mt = {}
-   local wrapper = {}
-   MEMOIZED_WRAPPERS[schema_id] = wrapper
+   -- Otherwise mimic the add() method
+   self:add(idx, val)
+end
 
-   -- A bunch of methods are identical regardless of the schema.
 
-   for name, method in pairs(cv_methods) do
-      class[name] = method
+------------------------------------------------------------------------
+-- Record
+
+RecordValue = CompoundValue:subclass("RecordValue")
+
+function RecordValue:get_child(idx)
+   local real_index = self.__real_indices[idx]
+   if not real_index then
+      error("No field "..tostring(idx))
    end
 
-   for name, method in pairs(cv_metamethods) do
-      mt[name] = method
+   if not self.children[real_index] then
+      self.children[real_index] = self.__child_classes[real_index]:new()
+   end
+   return self.children[real_index], real_index
+end
+
+function RecordValue:get(idx)
+   local child, real_index = self:get_child(idx)
+   local raw_child, err = self.raw:get(real_index)
+   if not raw_child then return raw_child, err end
+   return child:wrap(raw_child)
+end
+
+function RecordValue:set(idx, val)
+   local child, real_index = self:get_child(idx)
+   local raw_child, err = self.raw:get(real_index)
+   if not raw_child then return raw_child, err end
+   child:wrap(raw_child)
+   child:fill_from(val)
+end
+
+function RecordValue:tostring()
+   local field_str = {}
+   for i, field_name in ipairs(self.__field_names) do
+      assert(self:get(i))
+      local entry =
+         string.format("%s: %s", field_name, self.children[i]:tostring())
+      table.insert(field_str, entry)
+   end
+   return "{"..table.concat(field_str, ", ").."}"
+end
+
+function RecordValue.__mt:__index(idx)
+   -- First try a class method.
+   local result = get_class(self)[idx]
+   if result then return result end
+
+   -- Otherwise see if there's a field with this name or index.
+   return assert(RecordValue.get(self, idx))
+end
+
+function RecordValue.__mt:__newindex(idx, val)
+   -- If there's a class method with this name, you can't use the
+   -- table syntax.
+   if get_class(self)[idx] then
+      error("Cannot set "..tostring(idx).." with [] syntax")
    end
 
-   -- But some bits depend on the details of the schema.
+   -- Otherwise mimic the set() method
+   local child, real_index = self:get_child(idx)
+   local raw_child, err = self.raw:get(real_index)
+   if not raw_child then return raw_child, err end
+   child:wrap(raw_child)
+   child:fill_from(val)
+end
 
-   if schema_type == ACC.ARRAY then
-      local child_schema = schema:item_schema()
-      local child_wrapper = assert(get_wrapper_class(child_schema))
 
-      function class:get(index)
-         local child, err = self.raw:get(index)
-         if not child then return child, err end
-         return child_wrapper.get(child)
-      end
+------------------------------------------------------------------------
+-- Union
 
-      function class:append_(val)
-         return self.raw:append()
-      end
+UnionValue = CompoundValue:subclass("UnionValue")
 
-      function class:append(val)
-         local child = self.raw:append()
-         if val then
-            child_wrapper.set(child, val)
-         else
-            return child_wrapper.get(child)
-         end
-      end
-
-      function class:iterate(want_raw)
-         if want_raw then
-            return self.raw:iterate()
-         else
-            local f, s, var = self.raw:iterate()
-            local state = { f=f, s=s, var=var, child_wrapper=child_wrapper }
-            return iterate_wrapped, state, nil
-         end
-      end
-
-      function mt:__index(idx)
-         -- First try a class method.
-         local result = class[idx]
-         if result then return result end
-
-         -- Otherwise mimic the get() method
-         return self:get(idx)
-      end
-
-      function mt:__newindex(idx, val)
-         -- If there's a class method with this name, you can't use the
-         -- table syntax.
-         if class[idx] then
-            error("Cannot set "..tostring(idx).." with [] syntax")
-         end
-
-         -- Otherwise mimic the non-existent set() method
-         local child, err = self.raw:get(idx)
-         if not child then return child, err end
-         child_wrapper.set(child)
-      end
+function UnionValue:get_child(idx)
+   local real_index = self.__real_indices[idx]
+   if not real_index then
+      error("No branch "..tostring(idx))
    end
 
-   if schema_type == ACC.MAP then
-      local child_schema = schema:value_schema()
-      local child_wrapper = assert(get_wrapper_class(child_schema))
+   if not self.children[real_index] then
+      self.children[real_index] = self.__child_classes[real_index]:new()
+   end
+   return self.children[real_index], real_index
+end
 
-      function class:get(index)
-         local child, err = self.raw:get(index)
-         if not child then return child, err end
-         return child_wrapper.get(child)
-      end
+function UnionValue:get(index)
+   if index then
+      local child, real_index = self:get_child(index)
+      local raw_child, err = self.raw:get(real_index)
+      if not raw_child then return raw_child, err end
+      return child:wrap(raw_child)
+   else
+      index = self.raw:discriminant_index()
+      local raw_child, err = self.raw:get()
+      if not raw_child then return raw_child, err end
+      local child = self:get_child(index)
+      return child:wrap(raw_child)
+   end
+end
 
-      function class:set(index, value)
-         local child, err = self.raw:set(index)
-         if not child then return child, err end
-         child_wrapper.set(child, value)
-      end
+function UnionValue:set(index, val)
+   local child, real_index = self:get_child(idx)
+   local raw_child, err = self.raw:set(real_index)
+   if not raw_child then return raw_child, err end
+   child:wrap(raw_child)
+   if val then
+      child:fill_from(val)
+   end
+end
 
-      function class:add_(key)
-         return self.raw:add(key)
-      end
+function UnionValue:discriminant_index()
+   return self.raw:discriminant_index()
+end
 
-      function class:add(key, val)
-         local child = self.raw:add(key)
-         if val then
-            child_wrapper.set(child, val)
-         else
-            return child_wrapper.get(child)
-         end
-      end
+function UnionValue:discriminant()
+   return self.raw:discriminant()
+end
 
-      function class:iterate(want_raw)
-         if want_raw then
-            return self.raw:iterate()
-         else
-            local f, s, var = self.raw:iterate()
-            local state = { f=f, s=s, var=var, child_wrapper=child_wrapper }
-            return iterate_wrapped, state, nil
-         end
-      end
+function UnionValue:tostring()
+   local branch_name = self.raw:discriminant()
+   if branch_name == "null" then
+      return branch_name
+   else
+      local index = self.raw:discriminant_index()
+      local child = self:get_child(index)
+      local raw_child = self.raw:get()
+      child:wrap(raw_child)
+      return string.format("<%s> %s", branch_name, child:tostring())
+   end
+end
 
-      function mt:__index(idx)
-         -- First try a class method.
-         local result = class[idx]
-         if result then return result end
+function UnionValue.__mt:__index(idx)
+   -- First try a class method.
+   local result = get_class(self)[idx]
+   if result then return result end
 
-         -- Otherwise mimic the add() method
-         return self:add(idx)
-      end
+   -- The special "_" field represents the current active branch.
+   if idx == "_" then
+      return self:get()
+   else
+      return self:get(idx)
+   end
+end
 
-      function mt:__newindex(idx, val)
-         -- If there's a class method with this name, you can't use the
-         -- table syntax.
-         if class[idx] then
-            error("Cannot set "..tostring(idx).." with [] syntax")
-         end
-
-         -- Otherwise mimic the add() method
-         self:add(idx, val)
-      end
+function UnionValue.__mt:__newindex(idx, val)
+   -- If there's a class method with this name, you can't use the table
+   -- syntax.
+   if get_class(self)[idx] then
+      error("Cannot set "..tostring(idx).." with [] syntax")
    end
 
-   if schema_type == ACC.RECORD then
-      local fields = schema:fields()
-      local wrappers = {}
-      local real_indices = {}
-      for i, field_table in ipairs(fields) do
-         local field_name, field_schema = next(field_table)
-         local wrapper = assert(get_wrapper_class(field_schema))
-         wrappers[i] = wrapper
-         wrappers[field_name] = wrapper
-         real_indices[i] = i
-         real_indices[field_name] = i
-      end
-
-      function class:get(index)
-         local child, err = self.raw:get(index)
-         if not child then return child, err end
-         return wrappers[index].get(child)
-      end
-
-      function class:set(index)
-         local child, err = self.raw:set(index)
-         if not child then return child, err end
-         wrappers[index].set(child, val)
-      end
-
-      function mt:__index(idx)
-         -- First try a class method.
-         local result = class[idx]
-         if result then return result end
-
-         -- Otherwise see if there's a field with this name or index.
-         local real_index = real_indices[idx]
-         if real_index then
-            local child, err = self.raw:get(real_index)
-            if not child then return child, err end
-            return wrappers[real_index].get(child)
-         else
-            return nil, "No field "..tostring(idx)
-         end
-      end
-
-      function mt:__newindex(idx, val)
-         -- If there's a class method with this name, you can't use the
-         -- table syntax.
-         if class[idx] then
-            error("Cannot set "..tostring(idx).." with [] syntax")
-         end
-
-         -- Otherwise mimic the set() method
-         local real_index = real_indices[idx]
-         if real_index then
-            local child, err = self.raw:get(real_index)
-            if not child then return child, err end
-            wrappers[real_index].set(child, val)
-         else
-            return nil, "No field "..tostring(idx)
-         end
-      end
+   -- The special "_" field represents the current active branch.
+   if idx == "_" then
+      idx = self.raw:discriminant_index()
+      local raw_child, err = self.raw:get()
+      if not raw_child then return raw_child, err end
+      local child = self:get_child(idx)
+      child:wrap(raw_child)
+      child:fill_from(val)
+   else
+      local child, real_index = self:get_child(idx)
+      local raw_child, err = self.raw:get(real_index)
+      if not raw_child then return raw_child, err end
+      child:wrap(raw_child)
+      child:fill_from(val)
    end
-
-   if schema_type == ACC.UNION then
-      local branches = schema:branches()
-      local wrappers = {}
-      local real_indices = {}
-      for i, branch_table in ipairs(branches) do
-         local branch_name, branch_schema = next(branch_table)
-         local wrapper = assert(get_wrapper_class(branch_schema))
-         wrappers[i] = wrapper
-         wrappers[branch_name] = wrapper
-         real_indices[i] = i
-         real_indices[branch_name] = i
-      end
-
-      function class:get(index)
-         local child, err = self.raw:get(index)
-         if not child then return child, err end
-         if not index then
-            index = self.raw:discriminant_index()
-         end
-         return wrappers[index].get(child)
-      end
-
-      function class:set(index)
-         local child, err = self.raw:set(index)
-         if not child then return child, err end
-         wrappers[index].set(child, val)
-      end
-
-      function class:discriminant_index()
-         return self.raw:discriminant_index()
-      end
-
-      function class:discriminant()
-         return self.raw:discriminant()
-      end
-
-      function mt:__index(idx)
-         -- First try a class method.
-         local result = class[idx]
-         if result then return result end
-
-         -- The special "_" field represents the current active branch.
-         if idx == "_" then
-            local disc_index = self.raw:discriminant_index()
-            local child = self.raw:get()
-            return wrappers[disc_index].get(child)
-         end
-
-         -- Otherwise see if there's a field with this name or index.
-         local real_index = real_indices[idx]
-         if real_index then
-            local child, err = self.raw:set(real_index)
-            if not child then return child, err end
-            return wrappers[real_index].get(child)
-         else
-            return nil, "No branch "..tostring(idx)
-         end
-      end
-
-      function mt:__newindex(idx, val)
-         -- If there's a class method with this name, you can't use the
-         -- table syntax.
-         if class[idx] then
-            error("Cannot set "..tostring(idx).." with [] syntax")
-         end
-
-         -- The special "_" field represents the current active branch.
-         if idx == "_" then
-            local disc_index = self.raw:discriminant_index()
-            local child = self.raw:get()
-            wrappers[disc_index].set(child, val)
-            return
-         end
-
-         -- Otherwise mimic the set() method
-         local real_index = real_indices[idx]
-         if real_index then
-            local child, err = self.raw:set(real_index)
-            if not child then return child, err end
-            wrappers[real_index].set(child, val)
-         else
-            return nil, "No field "..tostring(idx)
-         end
-      end
-   end
-
-   -- The actual wrapper functions
-
-   function wrapper.get(raw_value)
-      local obj = { raw=raw_value }
-      setmetatable(obj, mt)
-      return obj
-   end
-
-   function wrapper.set(raw_value, val)
-      if val.raw == raw_value then
-         return
-      end
-      if getmetatable(val) == mt then
-         raw_value:copy_from(val.raw)
-      else
-         raw_value:set_from_ast(val)
-      end
-   end
-
-   return wrapper
 end
