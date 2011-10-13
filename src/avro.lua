@@ -32,16 +32,17 @@ end
 ------------------------------------------------------------------------
 -- Copy a bunch of public functions from the submodules.
 
-ArraySchema = AC.ArraySchema
-EnumSchema = AC.EnumSchema
-FixedSchema = AC.FixedSchema
-LinkSchema = AC.LinkSchema
-MapSchema = AC.MapSchema
-RecordSchema = AC.RecordSchema
+ArraySchema = AS.ArraySchema
+EnumSchema = AS.EnumSchema
+FixedSchema = AS.FixedSchema
+LinkSchema = AS.LinkSchema
+MapSchema = AS.MapSchema
+RecordSchema = AS.RecordSchema
+Schema = AS.Schema
+UnionSchema = AS.UnionSchema
+
 ResolvedReader = AC.ResolvedReader
 ResolvedWriter = AC.ResolvedWriter
-Schema = AC.Schema
-UnionSchema = AC.UnionSchema
 open = AC.open
 raw_decode_value = AC.raw_decode_value
 raw_encode_value = AC.raw_encode_value
@@ -50,10 +51,15 @@ wrapped_value = AC.wrapped_value
 
 get_wrapper_class = AW.get_wrapper_class
 set_wrapper_class = AW.set_wrapper_class
-get_wrapper = AW.get_wrapper
-set_wrapper = AW.set_wrapper
-wrapper_tostring = AW.wrapper_tostring
-tostring_wrapper = AW.tostring_wrapper
+Wrapper = AW.Wrapper
+ArrayValue = AW.ArrayValue
+CompoundValue = AW.CompoundValue
+LongValue = AW.LongValue
+MapValue = AW.MapValue
+RecordValue = AW.RecordValue
+ScalarValue = AW.ScalarValue
+StringValue = AW.StringValue
+UnionValue = AW.UnionValue
 
 boolean = AS.boolean
 bytes = AS.bytes

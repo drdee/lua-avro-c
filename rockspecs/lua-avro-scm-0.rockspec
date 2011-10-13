@@ -27,6 +27,7 @@ build = {
    modules = {
       avro = "src/avro.lua",
       ["avro.constants"] = "src/avro/constants.lua",
+      ["avro.dkjson"] = "src/avro/dkjson.lua",
       ["avro.schema"] = "src/avro/schema.lua",
       ["avro.wrapper"] = "src/avro/wrapper.lua",
       ["avro.c"] = "src/avro/c.lua",

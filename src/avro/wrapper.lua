@@ -75,6 +75,20 @@ module "avro.wrapper"
 
 
 ------------------------------------------------------------------------
+-- Wrapper dispatch table
+
+local WRAPPERS = {}
+
+function get_wrapper_class(schema_name)
+   return WRAPPERS[schema_name]
+end
+
+function set_wrapper_class(schema_name, wrapper)
+   WRAPPERS[schema_name] = wrapper
+end
+
+
+------------------------------------------------------------------------
 -- Wrapper superclass
 
 Wrapper = {}
@@ -128,56 +142,9 @@ end
 
 
 ------------------------------------------------------------------------
--- Wrapper dispatch table
-
--- These will be filled in below
-local ScalarValue = Wrapper:subclass("ScalarValue")
-local StringValue = Wrapper:subclass("StringValue")
-local LongValue = Wrapper:subclass("LongValue")
-
-local WRAPPERS = {}
-
-local SCALAR_WRAPPERS = {
-   boolean = ScalarValue,
-   bytes = StringValue,
-   double = ScalarValue,
-   float = ScalarValue,
-   int = ScalarValue,
-   long = LongValue,
-   null = ScalarValue,
-   string = StringValue,
-   enum = ScalarValue,
-   fixed = StringValue,
-}
-
-function get_wrapper_class(schema)
-   local schema_name = schema:name()
-
-   if WRAPPERS[schema_name] then
-      return WRAPPERS[schema_name]
-   end
-
-   if SCALAR_WRAPPERS[schema_name] then
-      return SCALAR_WRAPPERS[schema_name]
-   end
-
-   return new_compound_wrapper(schema)
-end
-
-function set_wrapper_class(schema_name, wrapper)
-   WRAPPERS[schema_name] = wrapper
-end
-
-function get_wrapper(raw)
-   local schema = raw:schema()
-   local class = get_wrapper_class(schema)
-   local wrapped = class:new()
-   return wrapped, wrapped:wrap(raw)
-end
-
-
-------------------------------------------------------------------------
 -- Default scalar value wrappers
+
+ScalarValue = Wrapper:subclass("ScalarValue")
 
 function ScalarValue:new_wrapped()
    return nil
@@ -194,6 +161,8 @@ function ScalarValue:fill_from(wrapped)
    self.wrapped = wrapped
 end
 
+StringValue = Wrapper:subclass("StringValue")
+
 StringValue.new_wrapped = ScalarValue.new_wrapped
 StringValue.wrap = ScalarValue.wrap
 StringValue.fill_from = ScalarValue.fill_from
@@ -201,6 +170,8 @@ StringValue.fill_from = ScalarValue.fill_from
 function StringValue:tostring()
    return string.format("%q", self.wrapped)
 end
+
+LongValue = Wrapper:subclass("LongValue")
 
 LongValue.new_wrapped = ScalarValue.new_wrapped
 LongValue.wrap = ScalarValue.wrap
@@ -217,8 +188,6 @@ end
 
 ------------------------------------------------------------------------
 -- Compound value superclass
-
-local MEMOIZED_CLASSES = {}
 
 CompoundValue = Wrapper:subclass("CompoundValue")
 
@@ -281,8 +250,8 @@ end
 
 function CompoundValue:fill_from(wrapped)
    if getmetatable(wrapped) == self.__mt then
-      if not rawequal(self.raw, wrapped) then
-         self.raw:copy_from(wrapped)
+      if not rawequal(self.raw, wrapped.raw) then
+         self.raw:copy_from(wrapped.raw)
       end
    else
       self.raw:set_from_ast(wrapped)
@@ -374,16 +343,6 @@ function ArrayValue.__mt:__newindex(idx, val)
    child:fill_from(val)
 end
 
-local function array_class(schema)
-   local class = ArrayValue:subclass(schema:name())
-   MEMOIZED_CLASSES[schema:id()] = class
-
-   local child_schema = schema:item_schema()
-   local child_class = assert(get_wrapper_class(child_schema))
-   class.__child_class = child_class
-   return class
-end
-
 
 ------------------------------------------------------------------------
 -- Map
@@ -457,16 +416,6 @@ function MapValue.__mt:__newindex(idx, val)
    self:add(idx, val)
 end
 
-local function map_class(schema)
-   local class = MapValue:subclass(schema:name())
-   MEMOIZED_CLASSES[schema:id()] = class
-
-   local child_schema = schema:value_schema()
-   local child_class = assert(get_wrapper_class(child_schema))
-   class.__child_class = child_class
-   return class
-end
-
 
 ------------------------------------------------------------------------
 -- Record
@@ -502,8 +451,7 @@ end
 
 function RecordValue:tostring()
    local field_str = {}
-   for i, field_table in ipairs(fields) do
-      local field_name, _ = next(field_table)
+   for i, field_name in ipairs(self.__field_names) do
       assert(self:get(i))
       local entry =
          string.format("%s: %s", field_name, self.children[i]:tostring())
@@ -534,27 +482,6 @@ function RecordValue.__mt:__newindex(idx, val)
    if not raw_child then return raw_child, err end
    child:wrap(raw_child)
    child:fill_from(val)
-end
-
-local function record_class(schema)
-   local class = RecordValue:subclass(schema:name())
-   MEMOIZED_CLASSES[schema:id()] = class
-
-   local fields = schema:fields()
-   local child_classes = {}
-   local real_indices = {}
-   for i, field_table in ipairs(fields) do
-      local field_name, field_schema = next(field_table)
-      local child_class = assert(get_wrapper_class(field_schema))
-      child_classes[i] = child_class
-      child_classes[field_name] = child_class
-      real_indices[i] = i
-      real_indices[field_name] = i
-   end
-
-   class.__child_classes = child_classes
-   class.__real_indices = real_indices
-   return class
 end
 
 
@@ -655,56 +582,5 @@ function UnionValue.__mt:__newindex(idx, val)
       if not raw_child then return raw_child, err end
       child:wrap(raw_child)
       child:fill_from(val)
-   end
-end
-
-local function union_class(schema)
-   local class = UnionValue:subclass(schema:name())
-   MEMOIZED_CLASSES[schema:id()] = class
-
-   local branches = schema:branches()
-   local child_classes = {}
-   local real_indices = {}
-   for i, branch_table in ipairs(branches) do
-      local branch_name, branch_schema = next(branch_table)
-      local child_class = assert(get_wrapper_class(branch_schema))
-      child_classes[i] = child_class
-      child_classes[branch_name] = child_class
-      real_indices[i] = i
-      real_indices[branch_name] = i
-   end
-
-   class.__child_classes = child_classes
-   class.__real_indices = real_indices
-   return class
-end
-
-
-------------------------------------------------------------------------
--- Compound wrappers
-
-function new_compound_wrapper(schema)
-   -- Links are handled specially.
-   local schema_type = schema:type()
-   if schema_type == ACC.LINK then
-      return new_compound_wrapper(schema:link_target())
-   end
-
-   -- See if we've already created a wrapper for this schema.
-   local schema_id = schema:id()
-   if MEMOIZED_CLASSES[schema_id] then
-      return MEMOIZED_CLASSES[schema_id]
-   end
-
-   -- Otherwise create a new one.
-
-   if schema_type == ACC.ARRAY then
-      return array_class(schema)
-   elseif schema_type == ACC.MAP then
-      return map_class(schema)
-   elseif schema_type == ACC.RECORD then
-      return record_class(schema)
-   elseif schema_type == ACC.UNION then
-      return union_class(schema)
    end
 end
