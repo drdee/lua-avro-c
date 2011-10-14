@@ -159,6 +159,7 @@ end
 function ScalarValue:fill_from(wrapped)
    self.raw:set(wrapped)
    self.wrapped = wrapped
+   return self.raw
 end
 
 StringValue = Wrapper:subclass("StringValue")
@@ -249,13 +250,17 @@ function CompoundValue:wrap(raw_value)
 end
 
 function CompoundValue:fill_from(wrapped)
-   if getmetatable(wrapped) == self.__mt then
+   local wrapped_mt = getmetatable(wrapped)
+   if wrapped_mt == getmetatable(self.raw) then
+      self.raw = wrapped
+   elseif wrapped_mt == self.__mt then
       if not rawequal(self.raw, wrapped.raw) then
          self.raw:copy_from(wrapped.raw)
       end
    else
       self.raw:set_from_ast(wrapped)
    end
+   return self.raw
 end
 
 
