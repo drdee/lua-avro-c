@@ -17,6 +17,7 @@ local next = next
 local pairs = pairs
 local print = print
 local rawequal = rawequal
+local rawget = rawget
 local rawset = rawset
 local setmetatable = setmetatable
 local string = string
@@ -250,10 +251,11 @@ function CompoundValue:wrap(raw_value)
 end
 
 function CompoundValue:fill_from(wrapped)
-   local wrapped_mt = getmetatable(wrapped)
-   if wrapped_mt == getmetatable(self.raw) then
+   if type(wrapped) == "cdata" and wrapped.is_raw_value then
       self.raw = wrapped
-   elseif wrapped_mt == self.__mt then
+   elseif type(wrapped) == "table" and rawget(wrapped, "is_raw_value") then
+      self.raw = wrapped
+   elseif getmetatable(wrapped) == self.__mt then
       if not rawequal(self.raw, wrapped.raw) then
          self.raw:copy_from(wrapped.raw)
       end
@@ -471,7 +473,7 @@ function RecordValue.__mt:__index(idx)
    if result then return result end
 
    -- Otherwise see if there's a field with this name or index.
-   return assert(RecordValue.get(self, idx))
+   return RecordValue.get(self, idx)
 end
 
 function RecordValue.__mt:__newindex(idx, val)

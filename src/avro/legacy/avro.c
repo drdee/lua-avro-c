@@ -1983,6 +1983,8 @@ luaopen_avro_legacy_avro(lua_State *L)
     luaL_newmetatable(L, MT_AVRO_VALUE);
     lua_createtable(L, 0, sizeof(value_methods) / sizeof(luaL_reg) - 1);
     luaL_register(L, NULL, value_methods);
+    lua_pushboolean(L, true);
+    lua_setfield(L, -2, "is_raw_value");
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_value_lt);
     lua_setfield(L, -2, "__lt");

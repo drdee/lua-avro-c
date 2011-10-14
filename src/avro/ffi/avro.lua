@@ -613,6 +613,8 @@ function raw_value(v_ud, should_decref)
    return self
 end
 
+Value_class.is_raw_value = true
+
 function Value_class:get(index)
    local value_type = self:type()
    if value_type == BOOLEAN then
