@@ -452,7 +452,7 @@ end
 function RecordValue:tostring()
    local field_str = {}
    for i, field_name in ipairs(self.__field_names) do
-      assert(self:get(i))
+      self:get(i)
       local entry =
          string.format("%s: %s", field_name, self.children[i]:tostring())
       table.insert(field_str, entry)
