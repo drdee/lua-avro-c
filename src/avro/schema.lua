@@ -138,6 +138,10 @@ function PrimitiveSchema:default_wrapper_class()
    return self.__default_wrapper_class
 end
 
+function PrimitiveSchema:clone(clones)
+   return self
+end
+
 
 local PRIMITIVES = {}
 
@@ -190,6 +194,11 @@ function ArraySchema:default_wrapper_class()
    return class
 end
 
+function ArraySchema:clone(clones)
+   local item_clone = self.item_schema:clone(clones or {})
+   return ArraySchema:new(item_clone)
+end
+
 
 MapSchema = {}
 MapSchema.__mt = { __index=MapSchema }
@@ -219,6 +228,11 @@ function MapSchema:default_wrapper_class()
    local child_class = assert(child_schema:wrapper_class())
    class.__child_class = child_class
    return class
+end
+
+function MapSchema:clone()
+   local value_clone = self.value_schema:clone(clones or {})
+   return MapSchema:new(value_clone)
 end
 
 
@@ -269,6 +283,20 @@ function EnumSchema:default_wrapper_class()
    return AW.ScalarValue
 end
 
+function EnumSchema:clone(clones)
+   clones = clones or {}
+   if clones[self.schema_name] then
+      return clones[self.schema_name]
+   end
+
+   local schema = EnumSchema:new(self.schema_name)
+   clones[self.schema_name] = schema
+   for _, sym in ipairs(self.symbols) do
+      schema:add_symbol(sym)
+   end
+   return schema
+end
+
 
 ------------------------------------------------------------------------
 -- Fixeds
@@ -298,6 +326,17 @@ end
 
 function FixedSchema:default_wrapper_class()
    return AW.ScalarValue
+end
+
+function FixedSchema:clone(clones)
+   clones = clones or {}
+   if clones[self.schema_name] then
+      return clones[self.schema_name]
+   end
+
+   local schema = FixedSchema:new(self.schema_name, self.fixed_size)
+   clones[self.schema_name] = schema
+   return schema
 end
 
 
@@ -367,6 +406,22 @@ function RecordSchema:default_wrapper_class()
    class.__real_indices = real_indices
    class.__field_names = self:field_names()
    return class
+end
+
+function RecordSchema:clone(clones)
+   clones = clones or {}
+   if clones[self.schema_name] then
+      return clones[self.schema_name]
+   end
+
+   local schema = RecordSchema:new(self.schema_name)
+   clones[self.schema_name] = schema
+   for _, field in ipairs(self.fields) do
+      local field_name, field_schema = next(field)
+      local field_clone = field_schema:clone(clones)
+      schema:add_field(field_name, field_clone)
+   end
+   return schema
 end
 
 function RecordSchema:field_names()
@@ -448,6 +503,16 @@ function UnionSchema:default_wrapper_class()
    class.__child_classes = child_classes
    class.__real_indices = real_indices
    return class
+end
+
+function UnionSchema:clone(clones)
+   clones = clones or {}
+   local schema = UnionSchema:new(self.schema_name)
+   for _, branch_schema in ipairs(self.branches) do
+      local branch_clone = branch_schema:clone(clones)
+      schema:add_branch(branch_clone)
+   end
+   return schema
 end
 
 

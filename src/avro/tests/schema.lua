@@ -43,6 +43,9 @@ do
       local schema = A.Schema:new(json)
       local actual = schema:type()
       assert(actual == expected)
+
+      local clone = schema:clone()
+      assert(schema == clone)
    end
 
    local function test_prim(prim_type, expected)
@@ -148,4 +151,8 @@ do
       "i", "l", "e", "a", "m", "ipv4", "dest_ipv4", "ipv6",
       "u", "sub", "children", "parent",
    }))
+
+   local clone = schema1:clone()
+   assert(schema1 == clone)
+   assert(schema2 == clone)
 end
