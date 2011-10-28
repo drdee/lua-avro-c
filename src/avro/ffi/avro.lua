@@ -517,12 +517,16 @@ local function new_schema(schema)
    return LuaAvroSchema(schema, nil)
 end
 
-function Schema_class:new_raw_value()
+function Schema_class:new_raw_value(value)
    if self.iface == nil then
       self.iface = avro.avro_generic_class_from_schema(self.schema)
       if self.iface == nil then avro_error() end
    end
-   local value = LuaAvroValue()
+   if value ~= nil then
+      value:release()
+   else
+      value = LuaAvroValue()
+   end
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
    value.should_decref = true
@@ -605,12 +609,17 @@ local v_size = ffi.new(size_t_ptr)
 local v_const_void_p = ffi.new(const_void_p_ptr)
 
 function raw_value(v_ud, should_decref)
-   local ud = ffi.cast(avro_value_t_ptr, v_ud)
    local self = LuaAvroValue()
+   self:set_raw_value(v_ud, should_decref)
+   return self
+end
+
+function Value_class:set_raw_value(v_ud, should_decref)
+   self:release()
+   local ud = ffi.cast(avro_value_t_ptr, v_ud)
    self.iface = ud.iface
    self.self = ud.self
    self.should_decref = should_decref or false
-   return self
 end
 
 Value_class.is_raw_value = true

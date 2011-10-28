@@ -72,9 +72,9 @@ function Schema:raw_schema()
    return self.raw
 end
 
-function Schema:new_raw_value()
+function Schema:new_raw_value(...)
    local raw = self:raw_schema()
-   return raw:new_raw_value()
+   return raw:new_raw_value(...)
 end
 
 function Schema:new_wrapped_value()

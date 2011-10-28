@@ -1276,9 +1276,20 @@ l_schema_new_raw_value(lua_State *L)
             return lua_error(L);
         }
     }
-    avro_value_t  value;
-    check(avro_generic_value_new(l_schema->iface, &value));
-    lua_avro_push_value(L, &value, true);
+
+    if (lua_gettop(L) >= 2) {
+        LuaAvroValue  *l_value = luaL_checkudata(L, 2, MT_AVRO_VALUE);
+        if (l_value->should_decref && l_value->value.self != NULL) {
+            avro_value_decref(&l_value->value);
+        }
+        check(avro_generic_value_new(l_schema->iface, &l_value->value));
+        l_value->should_decref = true;
+        lua_pushvalue(L, 2);
+    } else {
+        avro_value_t  value;
+        check(avro_generic_value_new(l_schema->iface, &value));
+        lua_avro_push_value(L, &value, true);
+    }
     return 1;
 }
 
