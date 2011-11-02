@@ -557,9 +557,7 @@ local function parse_decoded_json(decoded, link_table)
 
    elseif decoded.type == "enum" then
       local name = assert(decoded.name, "No name for enum")
-      if link_table[name] then
-         error([[Already have a schema named "]]..name..[["]])
-      end
+      local old_schema = link_table[name]
 
       local schema = EnumSchema:new(name)
       link_table[name] = schema
@@ -571,19 +569,35 @@ local function parse_decoded_json(decoded, link_table)
          end
          schema:add_symbol(sym)
       end
+
+      if old_schema then
+         if schema == old_schema then
+            link_table[name] = old_schema
+            return old_schema
+         else
+            error([[Already have a schema named "]]..name..[["]])
+         end
+      end
       return schema
 
    elseif decoded.type == "fixed" then
       local name = assert(decoded.name, "No name for fixed")
-      if link_table[name] then
-         error([[Already have a schema named "]]..name..[["]])
-      end
+      local old_schema = link_table[name]
 
       local size = assert(decoded.size, "No size for fixed")
       if type(size) ~= "number" then
          error("Fixed size must be a number")
       end
       local schema = FixedSchema:new(name, size)
+
+      if old_schema then
+         if schema == old_schema then
+            link_table[name] = old_schema
+            return old_schema
+         else
+            error([[Already have a schema named "]]..name..[["]])
+         end
+      end
       link_table[name] = schema
       return schema
 
@@ -595,9 +609,7 @@ local function parse_decoded_json(decoded, link_table)
 
    elseif decoded.type == "record" then
       local name = assert(decoded.name, "No name for record")
-      if link_table[name] then
-         error([[Already have a schema named "]]..name..[["]])
-      end
+      local old_schema = link_table[name]
 
       local schema = RecordSchema:new(name)
       link_table[name] = schema
@@ -612,6 +624,15 @@ local function parse_decoded_json(decoded, link_table)
          local field_type = assert(field.type, "No type for record field")
          local field_schema = parse_decoded_json(field_type, link_table)
          schema:add_field(field_name, field_schema)
+      end
+
+      if old_schema then
+         if schema == old_schema then
+            link_table[name] = old_schema
+            return old_schema
+         else
+            error([[Already have a schema named "]]..name..[["]])
+         end
       end
       return schema
 
