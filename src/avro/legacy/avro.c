@@ -1261,6 +1261,20 @@ lua_avro_get_raw_schema(lua_State *L, int index)
 }
 
 
+static int
+l_new_raw_schema(lua_State *L)
+{
+    avro_schema_t  schema = lua_touserdata(L, 1);
+    if (schema == NULL) {
+        lua_pushliteral(L, "Cannot create NULL schema wrapper");
+        return lua_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    lua_pushlightuserdata(L, schema);
+    return 2;
+}
+
+
 /**
  * Creates a new AvroValue for the given schema.
  */
@@ -1394,7 +1408,8 @@ l_schema_new(lua_State *L)
 
         lua_avro_push_schema(L, schema);
         avro_schema_decref(schema);
-        return 1;
+        lua_pushlightuserdata(L, schema);
+        return 2;
     }
 
     if (lua_isuserdata(L, 1)) {
@@ -1403,7 +1418,9 @@ l_schema_new(lua_State *L)
             if (lua_rawequal(L, -1, -2)) {
                 /* This is already a schema object, so just return it. */
                 lua_pop(L, 2);  /* remove both metatables */
-                return 1;
+                LuaAvroSchema  *l_schema = lua_touserdata(L, 1);
+                lua_pushlightuserdata(L, l_schema->schema);
+                return 2;
             }
         }
     }
@@ -1969,6 +1986,7 @@ static const luaL_Reg  mod_methods[] =
     {"ResolvedReader", l_resolved_reader_new},
     {"ResolvedWriter", l_resolved_writer_new},
     {"Schema", l_schema_new},
+    {"new_raw_schema", l_new_raw_schema},
     {"open", l_file_open},
     {"raw_decode_value", l_value_decode_raw},
     {"raw_encode_value", l_value_encode_raw},
