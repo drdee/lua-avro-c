@@ -580,9 +580,8 @@ function raw_value(v_ud, should_decref)
    return self
 end
 
-function Value_class:set_raw_value(v_ud, should_decref)
+function Value_class:set_raw_value(ud, should_decref)
    self:release()
-   local ud = ffi.cast(avro_value_t_ptr, v_ud)
    self.iface = ud.iface
    self.self = ud.self
    self.should_decref = should_decref or false
