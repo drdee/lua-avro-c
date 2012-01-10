@@ -29,6 +29,7 @@ build = {
       ["avro.constants"] = "src/avro/constants.lua",
       ["avro.dkjson"] = "src/avro/dkjson.lua",
       ["avro.schema"] = "src/avro/schema.lua",
+      ["avro.value"] = "src/avro/value.lua",
       ["avro.wrapper"] = "src/avro/wrapper.lua",
       ["avro.c"] = "src/avro/c.lua",
       ["avro.legacy.avro"] = {
@@ -41,6 +42,7 @@ build = {
       ["avro.test"] = "src/avro/test.lua",
       ["avro.tests.raw"] = "src/avro/tests/raw.lua",
       ["avro.tests.schema"] = "src/avro/tests/schema.lua",
+      ["avro.tests.value"] = "src/avro/tests/value.lua",
       ["avro.tests.wrapper"] = "src/avro/tests/wrapper.lua",
    },
 }

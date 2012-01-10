@@ -10,6 +10,7 @@
 local AC = require "avro.c"
 local ACC = require "avro.constants"
 local json = require "avro.dkjson"
+local AV = require "avro.value"
 local AW = require "avro.wrapper"
 
 local assert = assert
@@ -70,6 +71,12 @@ function Schema:raw_schema()
       self.raw = assert(AC.Schema(self:to_json()))
    end
    return self.raw
+end
+
+function Schema:new_value(...)
+   local raw = self:raw_schema()
+   local c_value = raw:new_raw_value(...)
+   return AV.Value:new_raw(c_value)
 end
 
 function Schema:new_raw_value(...)

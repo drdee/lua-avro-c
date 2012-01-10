@@ -1,12 +1,13 @@
 -- -*- coding: utf-8 -*-
 ------------------------------------------------------------------------
--- Copyright © 2011, RedJack, LLC.
+-- Copyright © 2011-2012, RedJack, LLC.
 -- All rights reserved.
 --
 -- Please see the LICENSE.txt file in this distribution for license
 -- details.
 ------------------------------------------------------------------------
 
+local AC = require "avro.c"
 local ACC = require "avro.constants"
 
 local assert = assert
@@ -49,20 +50,23 @@ module "avro.wrapper"
 -- predefined Wrapper class.  You should override the following
 -- functions:
 --
---   new_wrapper()
---     Return a new, empty wrapper instance for the given raw value.
+--   new(raw_value)
+--     Return a new wrapper instance.  If "raw_value" is given, the new
+--     instance should wrap the given raw value.  Otherwise it should
+--     start empty.
 --
 --   wrap(raw_value)
---     Causes self.wrapped (a wrapper instance) to wrap the given raw Avro
---     value.  The function should always return the wrapper instance,
---     which does not have to be the same as self.
+--     Update the wrapper instance to wrap the given raw Avro value.
+--     The function should always return the wrapper instance, which
+--     does not have to be the same as self.
 --
---   fill_from(wrapper)
---     Fills in the current raw Avro value with the contents of the
---     wrapper instance.  (If the wrapper instance is already directly
---     wrapping that raw value, then you don't need to do anything.)
---     wrapper can also be an arbitrary Lua value, in which case you
---     should pass in self to raw_value:set_from_ast().
+--   fill_from(other)
+--     Fills in the wrapper instance (and the underlying raw Avro value)
+--     with the contents of "other".  (If "other" is a raw Avro value,
+--     and the wrapper instance is already directly wrapping that raw
+--     value, then you don't need to do anything.)  "other" can also be
+--     another wrapper value, or an arbitrary Lua value, in which case
+--     you should fill in the "equivalent" value.
 --
 --   tostring()
 --     Returns a human-readable string description of the wrapped value.
@@ -143,41 +147,111 @@ end
 
 
 ------------------------------------------------------------------------
--- Default scalar value wrappers
+-- Common method implementations
+
+local function default_new(self, other)
+   local obj = {}
+   if other then
+      obj.c_value = AC.value_new()
+      AC.value_copy_ref(obj.c_value, c_value)
+   else
+      obj.c_value = self.__schema:new_raw_value()
+   end
+   obj.should_decref = true
+   return setmetatable(obj, self.__mt)
+end
+
+local function default_release(self)
+   if self.should_decref then
+      AC.avro_value_decref(self.c_value)
+      self.should_decref = false
+   end
+end
+
+local function default_hash(self)
+   return AC.value_hash(self.c_value)
+end
+
+local function default_to_json(self)
+   return AC.value_to_json(self.c_value)
+end
+
+local function default_type(self)
+   return AC.value_type(self.c_value)
+end
+
+
+------------------------------------------------------------------------
+-- Scalar value wrappers
 
 ScalarValue = Wrapper:subclass("ScalarValue")
 
-function ScalarValue:new_wrapped()
-   return nil
-end
+ScalarValue.new = default_new
+ScalarValue.release = default_release
+ScalarValue.to_json = default_to_json
+ScalarValue.type = default_type
+ScalarValue.__mt.__gc = default_release
 
-function ScalarValue:wrap(raw_value)
-   self.raw = raw_value
-   self.wrapped = raw_value:get()
+function ScalarValue:get()
+   self.wrapped = self.__getter(self.c_value)
    return self.wrapped
 end
 
-function ScalarValue:fill_from(wrapped)
-   self.raw:set(wrapped)
-   self.wrapped = wrapped
-   return self.raw
+function ScalarValue:set(val)
+   self.__setter(self.c_value, val)
+   self.wrapped = val
 end
 
-StringValue = Wrapper:subclass("StringValue")
+function ScalarValue:wrap(c_value)
+   self:release()
+   AC.value_copy_ref(self.c_value, c_value)
+   return self:get()
+end
 
-StringValue.new_wrapped = ScalarValue.new_wrapped
-StringValue.wrap = ScalarValue.wrap
-StringValue.fill_from = ScalarValue.fill_from
+function ScalarValue:fill_from(wrapped)
+   self:set(wrapped)
+   return self.c_value
+end
 
-function StringValue:tostring()
+-- boolean
+
+local BooleanValue = ScalarWrapper:subclass("BooleanValue")
+BooleanValue.__getter = AC.value_get_boolean
+BooleanValue.__setter = AC.value_set_boolean
+
+-- bytes
+
+local BytesValue = ScalarWrapper:subclass("BytesValue")
+BytesValue.__getter = AC.value_get_bytes
+BytesValue.__setter = AC.value_set_bytes
+
+function BytesValue:tostring()
    return string.format("%q", self.wrapped)
 end
 
-LongValue = Wrapper:subclass("LongValue")
+-- double
 
-LongValue.new_wrapped = ScalarValue.new_wrapped
-LongValue.wrap = ScalarValue.wrap
-LongValue.fill_from = ScalarValue.fill_from
+local DoubleValue = ScalarWrapper:subclass("DoubleValue")
+DoubleValue.__getter = AC.value_get_double
+DoubleValue.__setter = AC.value_set_double
+
+-- float
+
+local FloatValue = ScalarWrapper:subclass("FloatValue")
+FloatValue.__getter = AC.value_get_float
+FloatValue.__setter = AC.value_set_float
+
+-- int
+
+local IntValue = ScalarWrapper:subclass("IntValue")
+IntValue.__getter = AC.value_get_int
+IntValue.__setter = AC.value_set_int
+
+-- long
+
+local LongValue = ScalarWrapper:subclass("LongValue")
+LongValue.__getter = AC.value_get_long
+LongValue.__setter = AC.value_set_long
 
 if ffi_present then
    function LongValue:tostring()
@@ -187,11 +261,53 @@ if ffi_present then
    end
 end
 
+-- null
+
+local NullValue = ScalarWrapper:subclass("NullValue")
+NullValue.__getter = AC.value_get_null
+NullValue.__setter = AC.value_set_null
+
+-- string
+
+local StringValue = ScalarWrapper:subclass("StringValue")
+StringValue.__getter = AC.value_get_string
+StringValue.__setter = AC.value_set_string
+
+function StringValue:tostring()
+   return string.format("%q", self.wrapped)
+end
+
+-- enum
+
+local EnumValue = ScalarWrapper:subclass("EnumValue")
+EnumValue.__getter = AC.value_get_enum
+EnumValue.__setter = AC.value_set_enum
+
+-- fixed
+
+local FixedValue = ScalarWrapper:subclass("FixedValue")
+FixedValue.__getter = AC.value_get_string
+FixedValue.__setter = AC.value_set_string
+
+function FixedValue:tostring()
+   return string.format("%q", self.wrapped)
+end
+
 
 ------------------------------------------------------------------------
 -- Compound value superclass
 
 CompoundValue = Wrapper:subclass("CompoundValue")
+
+CompoundValue.release = default_release
+CompoundValue.to_json = default_to_json
+CompoundValue.type = default_type
+
+function CompoundValue:new(other)
+   local obj = default_new(self, other)
+   rawset(obj, "children", {})
+   return obj
+end
 
 function CompoundValue:cmp(other)
    return self.raw:cmp(other.raw)
@@ -201,30 +317,9 @@ function CompoundValue:copy_from(other)
    return self.raw:copy_from(other.raw)
 end
 
-function CompoundValue:hash()
-   return self.raw:hash()
-end
-
-function CompoundValue:release()
-   self.raw:release()
-   self.children = {}
-end
-
 function CompoundValue:reset()
-   self.raw:reset()
+   AC.value_reset(self.c_value)
    self.children = {}
-end
-
-function CompoundValue:set_from_ast(ast)
-   return self.raw:set_from_ast(ast)
-end
-
-function CompoundValue:to_json()
-   return self.raw:to_json()
-end
-
-function CompoundValue:type()
-   return self.raw:type()
 end
 
 function CompoundValue.__mt:__lt(other)
@@ -240,29 +335,22 @@ function CompoundValue.__mt:__eq(other)
 end
 
 
-function CompoundValue:new()
-   local obj = { raw=nil, children={} }
-   return setmetatable(obj, self.__mt)
-end
 
-function CompoundValue:wrap(raw_value)
-   rawset(self, "raw", raw_value)
+function CompoundValue:wrap(c_value)
+   self:release()
+   AC.value_copy_ref(self.c_value, c_value)
    return self
 end
 
-function CompoundValue:fill_from(wrapped)
-   if type(wrapped) == "cdata" and wrapped.is_raw_value then
-      self.raw = wrapped
-   elseif type(wrapped) == "table" and rawget(wrapped, "is_raw_value") then
-      self.raw = wrapped
-   elseif getmetatable(wrapped) == self.__mt then
-      if not rawequal(self.raw, wrapped.raw) then
-         self.raw:copy_from(wrapped.raw)
+function CompoundValue:fill_from(other)
+   if getmetatable(other) == self.__mt then
+      if not rawequal(self.c_value, other.c_value) then
+         AC.value_copy(self.c_value, other.c_value)
       end
    else
-      self.raw:set_from_ast(wrapped)
+      self:set_from_ast(other)
    end
-   return self.raw
+   return self.c_value
 end
 
 

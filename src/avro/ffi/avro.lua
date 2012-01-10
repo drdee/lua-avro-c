@@ -1,6 +1,6 @@
 -- -*- coding: utf-8 -*-
 ------------------------------------------------------------------------
--- Copyright © 2011, RedJack, LLC.
+-- Copyright © 2011-2012, RedJack, LLC.
 -- All rights reserved.
 --
 -- Please see the LICENSE.txt file in this distribution for license
@@ -65,33 +65,17 @@ end
 ------------------------------------------------------------------------
 -- Avro value interface
 
--- Note that the avro_value_t definition below does not exactly match
--- the one from the Avro C library.  We need to store an additional
--- field, indicating whether the value should be decref-ed in its
--- release() method.  Ideally, we'd use a wrapper struct like this:
---
--- typedef struct LuaAvroValue {
---     avro_value_t  value;
---     bool  should_decref;
--- } LuaAvroValue;
---
--- Unfortunately, the LuaJIT compiler doesn't currently support
--- JIT-compiling nested structures, and since Avro values will be used
--- in a lot of tight loops, it's important to get those compiled to
--- machine code.
---
--- So to get around this, we're incorporating the extra field into our
--- own definition of avro_value_t.  The beginning of the struct still
--- matches what the library expects, so we should be okay.
-
 ffi.cdef [[
 typedef struct avro_value_iface  avro_value_iface_t;
 
 typedef struct avro_value {
     avro_value_iface_t  *iface;
     void  *self;
-    bool  should_decref;
 } avro_value_t;
+
+typedef struct avro_value_wrapper {
+   avro_value_t  *value;
+};
 
 typedef avro_obj_t  *avro_schema_t;
 typedef struct avro_wrapped_buffer  avro_wrapped_buffer_t;
@@ -212,7 +196,7 @@ local avro_schema_t = ffi.typeof([[avro_schema_t]])
 
 local avro_value_t = ffi.typeof([[avro_value_t]])
 local avro_value_t_ptr = ffi.typeof([[avro_value_t *]])
-local LuaAvroValue
+local avro_value_t_wrapper = ffi.type
 
 local LuaAvroDataInputFile
 local LuaAvroDataOutputFile
@@ -532,7 +516,7 @@ function Schema_class:new_raw_value(value)
    if value ~= nil then
       value:release()
    else
-      value = LuaAvroValue()
+      value = avro_value_t()
    end
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
@@ -575,396 +559,415 @@ local v_size = ffi.new(size_t_ptr)
 local v_const_void_p = ffi.new(const_void_p_ptr)
 
 function raw_value(v_ud, should_decref)
-   local self = LuaAvroValue()
+   local self = avro_value_t()
    self:set_raw_value(v_ud, should_decref)
    return self
 end
 
-function Value_class:set_raw_value(v_ud, should_decref)
-   self:release()
-   self.iface = ud.iface
-   self.self = ud.self
-   self.should_decref = should_decref or false
-end
-
 Value_class.is_raw_value = true
 
-function Value_class:get(index)
-   local value_type = self:type()
-   if value_type == BOOLEAN then
-      if self.iface.get_boolean == nil then
-         error "No implementation for get_boolean"
+function value_new()
+   return avro_value_t()
+end
+
+function value_incref(self)
+   C.avro_value_incref(self)
+end
+
+function value_decref(self)
+   C.avro_value_decref(self)
+end
+
+function value_copy_ref(self, other)
+   C.avro_value_copy_ref(self, other)
+end
+
+function value_move_ref(self, other)
+   C.avro_value_move_ref(self, other)
+end
+
+function value_hash(self)
+   C.avro_value_hash(self)
+end
+
+function value_reset()
+   if self.iface.reset ~= nil then
+      self.iface.reset(self.iface, self.self)
+   else
+      error "No implementation for reset"
+   end
+end
+
+function value_to_json(self)
+   local rc = avro.avro_value_to_json(self, true, v_char_p)
+   if rc ~= 0 then avro_error() end
+   local result = ffi.string(v_char_p[0])
+   ffi.C.free(v_char_p[0])
+   return result
+end
+
+function value_type(self)
+   return self.iface.get_type(self.iface, self.self)
+end
+
+
+-- getters
+
+function value_get_boolean(self)
+   if self.iface.get_boolean == nil then
+      error "No implementation for get_boolean"
+   end
+   local rc = self.iface.get_boolean(self.iface, self.self, v_int)
+   if rc ~= 0 then avro_error() end
+   return v_int[0] ~= 0
+end
+
+function value_get_bytes(self)
+   if self.iface.get_bytes == nil then
+      error "No implementation for get_bytes"
+   end
+   local rc = self.iface.get_bytes(self.iface, self.self, v_const_void_p, v_size)
+   if rc ~= 0 then avro_error() end
+   return ffi.string(v_const_void_p[0], v_size[0])
+end
+
+function value_get_double(self)
+   if self.iface.get_double == nil then
+      error "No implementation for get_double"
+   end
+   local rc = self.iface.get_double(self.iface, self.self, v_double)
+   if rc ~= 0 then avro_error() end
+   return v_double[0]
+end
+
+function value_get_float(self)
+   if self.iface.get_float == nil then
+      error "No implementation for get_float"
+   end
+   local rc = self.iface.get_float(self.iface, self.self, v_float)
+   if rc ~= 0 then avro_error() end
+   return v_float[0]
+end
+
+function value_get_int(self)
+   if self.iface.get_int == nil then
+      error "No implementation for get_int"
+   end
+   local rc = self.iface.get_int(self.iface, self.self, v_int32)
+   if rc ~= 0 then avro_error() end
+   return v_int32[0]
+end
+
+function value_get_long(self)
+   if self.iface.get_long == nil then
+      error "No implementation for get_long"
+   end
+   local rc = self.iface.get_long(self.iface, self.self, v_int64)
+   if rc ~= 0 then avro_error() end
+   return v_int64[0]
+end
+
+function value_get_null(self)
+   if self.iface.get_null == nil then
+      error "No implementation for get_null"
+   end
+   local rc = self.iface.get_null(self.iface, self.self)
+   if rc ~= 0 then avro_error() end
+   return nil
+end
+
+function value_get_string(self)
+   if self.iface.get_string == nil then
+      error "No implementation for get_string"
+   end
+   local rc = self.iface.get_string(self.iface, self.self, v_const_char_p, v_size)
+   if rc ~= 0 then avro_error() end
+   -- size contains the NUL terminator
+   return ffi.string(v_const_char_p[0], v_size[0] - 1)
+end
+
+function value_get_enum(self)
+   if self.iface.get_enum == nil then
+      error "No implementation for get_enum"
+   end
+   local rc = self.iface.get_enum(self.iface, self.self, v_int)
+   if rc ~= 0 then avro_error() end
+   local schema = self.iface.get_schema(self.iface, self.self)
+   if schema == nil then avro_error() end
+   local symbol_name = avro.avro_schema_enum_get(schema, v_int[0])
+   if symbol_name == nil then avro_error() end
+   return ffi.string(symbol_name)
+end
+
+function value_get_fixed(self)
+   if self.iface.get_fixed == nil then
+      error "No implementation for get_fixed"
+   end
+   local rc = self.iface.get_fixed(self.iface, self.self, v_const_void_p, v_size)
+   if rc ~= 0 then avro_error() end
+   return ffi.string(v_const_void_p[0], v_size[0])
+end
+
+function value_get_array(self, index, dest)
+   if type(index) == "number" then
+      local rc = self.iface.get_size(self.iface, self.self, v_size)
+      if rc ~= 0 then return get_avro_error() end
+      if index < 1 or index > v_size[0] then
+         error "Index out of bounds"
       end
-      local rc = self.iface.get_boolean(self.iface, self.self, v_int)
+      dest.should_decref = false
+      rc = self.iface.get_by_index(self.iface, self.self, index-1,
+                                   dest.c_value, nil)
       if rc ~= 0 then avro_error() end
-      return v_int[0] ~= 0
-   elseif value_type == BYTES then
-      local size = ffi.new(int64_t_ptr)
-      if self.iface.get_bytes == nil then
-         error "No implementation for get_bytes"
+
+   else
+      error "Can only get integer index from array"
+   end
+end
+
+function value_get_map(self, index, dest)
+   if type(index) == "string" then
+      dest.should_decref = false
+      local rc = self.iface.get_by_name(self.iface, self.self, index,
+                                        dest.c_value, v_size_t)
+      if rc ~= 0 then return get_avro_error() end
+      if dest.self == nil then
+         error("No element named "..index)
+      else
+         return index, v_size_t[0]
       end
-      local rc = self.iface.get_bytes(self.iface, self.self, v_const_void_p, v_size)
-      if rc ~= 0 then avro_error() end
-      return ffi.string(v_const_void_p[0], v_size[0])
-   elseif value_type == DOUBLE then
-      if self.iface.get_double == nil then
-         error "No implementation for get_double"
+
+   elseif type(index) == "number" then
+      local rc = self.iface.get_size(self.iface, self.self, v_size)
+      if rc ~= 0 then return get_avro_error() end
+      if index < 1 or index > v_size[0] then
+         error "Index out of bounds"
       end
-      local rc = self.iface.get_double(self.iface, self.self, v_double)
-      if rc ~= 0 then avro_error() end
-      return v_double[0]
-   elseif value_type == FLOAT then
-      if self.iface.get_float == nil then
-         error "No implementation for get_float"
-      end
-      local rc = self.iface.get_float(self.iface, self.self, v_float)
-      if rc ~= 0 then avro_error() end
-      return v_float[0]
-   elseif value_type == INT then
-      if self.iface.get_int == nil then
-         error "No implementation for get_int"
-      end
-      local rc = self.iface.get_int(self.iface, self.self, v_int32)
-      if rc ~= 0 then avro_error() end
-      return v_int32[0]
-   elseif value_type == LONG then
-      if self.iface.get_long == nil then
-         error "No implementation for get_long"
-      end
-      local rc = self.iface.get_long(self.iface, self.self, v_int64)
-      if rc ~= 0 then avro_error() end
-      return v_int64[0]
-   elseif value_type == NULL then
-      if self.iface.get_null == nil then
-         error "No implementation for get_null"
-      end
-      local rc = self.iface.get_null(self.iface, self.self)
-      if rc ~= 0 then avro_error() end
-      return nil
-   elseif value_type == STRING then
-      local size = ffi.new(int64_t_ptr)
-      if self.iface.get_string == nil then
-         error "No implementation for get_string"
-      end
-      local rc = self.iface.get_string(self.iface, self.self, v_const_char_p, v_size)
-      if rc ~= 0 then avro_error() end
-      -- size contains the NUL terminator
-      return ffi.string(v_const_char_p[0], v_size[0] - 1)
-   elseif value_type == ENUM then
-      if self.iface.get_enum == nil then
-         error "No implementation for get_enum"
-      end
-      local rc = self.iface.get_enum(self.iface, self.self, v_int)
-      if rc ~= 0 then avro_error() end
+      dest.should_decref = false
+      local rc = self.iface.get_by_index(self.iface, self.self, index-1,
+                                         dest.c_value, v_const_char_p)
+      if rc ~= 0 then return get_avro_error() end
+      return ffi.string(v_const_char_p[0]), index
+
+   else
+      error "Can only get string or integer index from map"
+   end
+end
+
+function value_get_record(self, index, dest)
+   if type(index) == "string" then
+      dest.should_decref = false
+      local rc =
+         self.iface.get_by_name(self.iface, self.self, index, dest, nil)
+      if rc ~= 0 then return get_avro_error() end
+
+   elseif type(index) == "number" then
+      dest.should_decref = false
+      local rc =
+         self.iface.get_by_index(self.iface, self.self, index-1, dest, nil)
+      if rc ~= 0 then return get_avro_error() end
+
+   else
+      error "Can only get string or integer index from record"
+   end
+end
+
+function value_get_union(self, index, branch)
+   if type(index) == "string" then
+      local union_schema = self.iface.get_schema(self.iface, self.self)
+      local branch_schema = avro.avro_schema_union_branch_by_name(
+         union_schema, v_int, index
+      )
+      if branch_schema == nil then return get_avro_error() end
+      branch.should_decref = false
+      local rc = self.iface.set_branch(self.iface, self.self, v_int[0], branch)
+      if rc ~= 0 then return get_avro_error() end
+
+   elseif type(index) == "number" then
+      branch.should_decref = false
+      local rc = self.iface.set_branch(self.iface, self.self, index-1, branch)
+      if rc ~= 0 then return get_avro_error() end
+
+   elseif type(index) == "nil" then
+      branch.should_decref = false
+      local rc = self.iface.get_current_branch(self.iface, self.self, branch)
+      if rc ~= 0 then return get_avro_error() end
+
+   else
+      error "Invalid index type for union"
+   end
+end
+
+
+-- setters
+
+function value_set_boolean(self, val)
+   if self.iface.set_boolean == nil then
+      error "No implementation for set_boolean"
+   end
+   local rc = self.iface.set_boolean(self.iface, self.self, val)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_bytes(self, val)
+   if self.iface.set_bytes == nil then
+      error "No implementation for set_bytes"
+   end
+   local void_val = ffi.cast(void_p, val)
+   local rc = self.iface.set_bytes(self.iface, self.self, void_val, #val)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_double(self, val)
+   if self.iface.set_double == nil then
+      error "No implementation for set_double"
+   end
+   local rc = self.iface.set_double(self.iface, self.self, val)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_float(self, val)
+   if self.iface.set_float == nil then
+      error "No implementation for set_float"
+   end
+   local rc = self.iface.set_float(self.iface, self.self, val)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_int(self, val)
+   if self.iface.set_int == nil then
+      error "No implementation for set_int"
+   end
+   local rc = self.iface.set_int(self.iface, self.self, val)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_long(self, val)
+   if self.iface.set_long == nil then
+      error "No implementation for set_long"
+   end
+   local rc = self.iface.set_long(self.iface, self.self, val)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_null(self, val)
+   if self.iface.set_null == nil then
+      error "No implementation for set_null"
+   end
+   local rc = self.iface.set_null(self.iface, self.self)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_string(self, val)
+   if self.iface.set_string_len == nil then
+      error "No implementation for set_string_len"
+   end
+   -- length must include the NUL terminator
+   local char_val = ffi.cast(char_p, val)
+   local rc = self.iface.set_string_len(self.iface, self.self, char_val, #val+1)
+   if rc ~= 0 then avro_error() end
+end
+
+function value_set_enum(self, val)
+   if self.iface.set_enum == nil then
+      error "No implementation for set_enum"
+   end
+   local symbol_value
+   if type(val) == "number" then
+      symbol_value = val-1
+   else
       local schema = self.iface.get_schema(self.iface, self.self)
       if schema == nil then avro_error() end
-      local symbol_name = avro.avro_schema_enum_get(schema, v_int[0])
-      if symbol_name == nil then avro_error() end
-      return ffi.string(symbol_name)
-   elseif value_type == FIXED then
-      local size = ffi.new(int64_t_ptr)
-      if self.iface.get_fixed == nil then
-         error "No implementation for get_fixed"
+      symbol_value = avro.avro_schema_enum_get_by_name(schema, val)
+      if symbol_value < 0 then
+         error("No symbol named "..val)
       end
-      local rc = self.iface.get_fixed(self.iface, self.self, v_const_void_p, v_size)
-      if rc ~= 0 then avro_error() end
-      return ffi.string(v_const_void_p[0], v_size[0])
-
-   elseif value_type == ARRAY then
-      if type(index) == "number" then
-         local rc = self.iface.get_size(self.iface, self.self, v_size)
-         if rc ~= 0 then return get_avro_error() end
-         if index < 1 or index > v_size[0] then
-            error "Index out of bounds"
-         end
-         local element = LuaAvroValue()
-         element.should_decref = false
-         rc = self.iface.get_by_index(self.iface, self.self, index-1, element, nil)
-         if rc ~= 0 then avro_error() end
-         return element
-      end
-
-      error "Can only get integer index from array"
-
-   elseif value_type == MAP then
-      if type(index) == "string" then
-         local element = LuaAvroValue()
-         element.should_decref = false
-         local rc = self.iface.get_by_name(self.iface, self.self, index, element, v_size_t)
-         if rc ~= 0 then return get_avro_error() end
-         if element.self == nil then
-            error("No element named "..index)
-         else
-            return element, v_size_t[0]
-         end
-
-      elseif type(index) == "number" then
-         local rc = self.iface.get_size(self.iface, self.self, v_size)
-         if rc ~= 0 then return get_avro_error() end
-         if index < 1 or index > v_size[0] then
-            error "Index out of bounds"
-         end
-         local element = LuaAvroValue()
-         element.should_decref = false
-         local rc = self.iface.get_by_index(self.iface, self.self, index-1,
-                                            element, v_const_char_p)
-         if rc ~= 0 then return get_avro_error() end
-         return element, ffi.string(v_const_char_p[0])
-      end
-
-      error "Can only get string or integer index from map"
-
-   elseif value_type == RECORD then
-      if type(index) == "string" then
-         local field = LuaAvroValue()
-         field.should_decref = false
-         local rc = self.iface.get_by_name(self.iface, self.self, index, field, nil)
-         if rc ~= 0 then return get_avro_error() end
-         return field
-
-      elseif type(index) == "number" then
-         local field = LuaAvroValue()
-         field.should_decref = false
-         local rc = self.iface.get_by_index(self.iface, self.self, index-1, field, nil)
-         if rc ~= 0 then return get_avro_error() end
-         return field
-      end
-
-      error "Can only get string index from record"
-
-   elseif value_type == UNION then
-      if type(index) == "string" then
-         local union_schema = self.iface.get_schema(self.iface, self.self)
-         local branch_schema = avro.avro_schema_union_branch_by_name(
-            union_schema, v_int, index
-         )
-         if branch_schema == nil then return get_avro_error() end
-         local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, v_int[0], branch)
-         if rc ~= 0 then return get_avro_error() end
-         return branch
-
-      elseif type(index) == "number" then
-         local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, index-1, branch)
-         if rc ~= 0 then return get_avro_error() end
-         return branch
-
-      elseif type(index) == "nil" then
-         local branch = LuaAvroValue()
-         branch.should_decref = false
-         local rc = self.iface.get_current_branch(self.iface, self.self, branch)
-         if rc ~= 0 then return get_avro_error() end
-         return branch
-      end
-
-   else
-      error("Don't know how to get from value type "..tostring(value_type))
    end
+   local rc = self.iface.set_enum(self.iface, self.self, symbol_value)
+   if rc ~= 0 then avro_error() end
 end
 
-function Value_class:set(val)
-   local value_type = self:type()
-   if value_type == BOOLEAN then
-      if self.iface.set_boolean == nil then
-         error "No implementation for set_boolean"
-      end
-      local rc = self.iface.set_boolean(self.iface, self.self, val)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == BYTES then
-      if self.iface.set_bytes == nil then
-         error "No implementation for set_bytes"
-      end
-      local void_val = ffi.cast(void_p, val)
-      local rc = self.iface.set_bytes(self.iface, self.self, void_val, #val)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == DOUBLE then
-      if self.iface.set_double == nil then
-         error "No implementation for set_double"
-      end
-      local rc = self.iface.set_double(self.iface, self.self, val)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == FLOAT then
-      if self.iface.set_float == nil then
-         error "No implementation for set_float"
-      end
-      local rc = self.iface.set_float(self.iface, self.self, val)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == INT then
-      if self.iface.set_int == nil then
-         error "No implementation for set_int"
-      end
-      local rc = self.iface.set_int(self.iface, self.self, val)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == LONG then
-      if self.iface.set_long == nil then
-         error "No implementation for set_long"
-      end
-      local rc = self.iface.set_long(self.iface, self.self, val)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == NULL then
-      if self.iface.set_null == nil then
-         error "No implementation for set_null"
-      end
-      local rc = self.iface.set_null(self.iface, self.self)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == STRING then
-      if self.iface.set_string_len == nil then
-         error "No implementation for set_string_len"
-      end
-      -- length must include the NUL terminator
-      local char_val = ffi.cast(char_p, val)
-      local rc = self.iface.set_string_len(self.iface, self.self, char_val, #val+1)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == ENUM then
-      if self.iface.set_enum == nil then
-         error "No implementation for set_enum"
-      end
-      local symbol_value
-      if type(val) == "number" then
-         symbol_value = val-1
-      else
-         local schema = self.iface.get_schema(self.iface, self.self)
-         if schema == nil then avro_error() end
-         symbol_value = avro.avro_schema_enum_get_by_name(schema, val)
-         if symbol_value < 0 then
-            error("No symbol named "..val)
-         end
-      end
-      local rc = self.iface.set_enum(self.iface, self.self, symbol_value)
-      if rc ~= 0 then avro_error() end
-      return
-   elseif value_type == FIXED then
-      if self.iface.set_fixed == nil then
-         error "No implementation for set_fixed"
-      end
-      local void_val = ffi.cast(void_p, val)
-      local rc = self.iface.set_fixed(self.iface, self.self, void_val, #val)
-      if rc ~= 0 then avro_error() end
-      return
-
-   elseif value_type == MAP then
-      if type(val) == "string" then
-         local element = LuaAvroValue()
-         element.should_decref = false
-         local rc = self.iface.add(self.iface, self.self, val, element, nil, nil)
-         if rc ~= 0 then return get_avro_error() end
-         return element
-      end
-
-      return nil, "Can only set string index in map"
-
-   elseif value_type == UNION then
-      if type(val) == "string" then
-         local union_schema = self.iface.get_schema(self.iface, self.self)
-         local branch_schema = avro.avro_schema_union_branch_by_name(
-            union_schema, v_int, val
-         )
-         if branch_schema == nil then return get_avro_error() end
-         local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, v_int[0], branch)
-         if rc ~= 0 then return get_avro_error() end
-         return branch
-
-      elseif type(val) == "number" then
-         local branch = LuaAvroValue()
-         local rc = self.iface.set_branch(self.iface, self.self, val-1, branch)
-         if rc ~= 0 then return get_avro_error() end
-         return branch
-      end
-
-      return nil, "Can only set string or integer index in union"
-
-   else
-      error("Don't know how to set in value type "..tostring(value_type))
+function value_set_fixed(self, val)
+   if self.iface.set_fixed == nil then
+      error "No implementation for set_fixed"
    end
+   local void_val = ffi.cast(void_p, val)
+   local rc = self.iface.set_fixed(self.iface, self.self, void_val, #val)
+   if rc ~= 0 then avro_error() end
 end
 
-function Value_class:append()
-   if self:type() ~= ARRAY then
-      error("Can only append to an array")
-   end
-
+function value_append_array(self, dest)
    if self.iface.append == nil then
       error "No implementation for append"
    end
-
-   local element = LuaAvroValue()
-   local rc = self.iface.append(self.iface, self.self, element, nil)
+   dest.should_decref = false
+   local rc = self.iface.append(self.iface, self.self, dest, nil)
    if rc ~= 0 then avro_error() end
-
-   return element
 end
 
-function Value_class:add(key)
-   if self:type() ~= MAP then
-      error("Can only add to a map")
-   end
-
+function value_add_map(self, key, dest)
    if self.iface.add == nil then
       error "No implementation for add"
    end
-
-   local element = LuaAvroValue()
-   local rc = self.iface.add(self.iface, self.self, key, element, nil, nil)
+   dest.should_decref = false
+   local rc = self.iface.add(self.iface, self.self, key, dest, nil, nil)
    if rc ~= 0 then avro_error() end
-
-   return element
 end
 
-function Value_class:size()
-   local value_type = self:type()
-   if value_type == ARRAY then
-      if self.iface.get_size == nil then
-         error "no implementation for get_size"
-      end
-      local rc = self.iface.get_size(self.iface, self.self, v_size)
-      if rc ~= 0 then avro_error() end
-      return tonumber(v_size[0])
-   elseif value_type == MAP then
-      local size = ffi.new(int64_t_ptr)
-      if self.iface.get_bytes == nil then
-         error "No implementation for get_bytes"
-      end
-      local rc = self.iface.get_bytes(self.iface, self.self, v_const_void_p, v_size)
-      if rc ~= 0 then avro_error() end
-      return ffi.string(v_const_void_p[0], v_size[0])
-   else
-      error("Can only get size of array or map")
+function value_size_array(self)
+   if self.iface.get_size == nil then
+      error "No implementation for get_size"
    end
+   local rc = self.iface.get_size(self.iface, self.self, v_size)
+   if rc ~= 0 then avro_error() end
+   return tonumber(v_size[0])
 end
 
-function Value_class:discriminant_index()
-   if self:type() ~= UNION then
-      error("Can't get discriminant of a non-union value")
+function value_size_map(self)
+   if self.iface.get_size == nil then
+      error "No implementation for get_size"
    end
+   local rc = self.iface.get_size(self.iface, self.self, v_size)
+   if rc ~= 0 then avro_error() end
+   return tonumber(v_size[0])
+end
 
+function value_union_discriminant_index(self)
    if self.iface.get_discriminant == nil then
       error "No implementation for get_discriminant"
    end
-
    local rc = self.iface.get_discriminant(self.iface, self.self, v_int)
    if rc ~= 0 then avro_error() end
-
    return v_int[0]+1
 end
 
-function Value_class:discriminant()
-   local disc = self:discriminant_index()
-
+function value_union_discriminant_name(self)
+   local disc = value_union_discriminant(self)
    local union_schema = self.iface.get_schema(self.iface, self.self)
    if union_schema == nil then avro_error() end
-
    local branch = avro.avro_schema_union_branch(union_schema, disc-1)
    return ffi.string(avro.avro_schema_type_name(branch))
+end
+
+function value_union_set_branch(self, val, dest)
+   if type(val) == "string" then
+      local union_schema = self.iface.get_schema(self.iface, self.self)
+      local branch_schema = avro.avro_schema_union_branch_by_name(
+         union_schema, v_int, val
+      )
+      if branch_schema == nil then return get_avro_error() end
+      dest.should_decref = false
+      local rc = self.iface.set_branch(self.iface, self.self, v_int[0], dest)
+      if rc ~= 0 then return get_avro_error() end
+
+   elseif type(val) == "number" then
+      dest.should_decref = false
+      local rc = self.iface.set_branch(self.iface, self.self, val-1, dest)
+      if rc ~= 0 then return get_avro_error() end
+
+   else
+      return nil, "Union branch index must be string or integer"
+   end
 end
 
 function Value_class:encode()
@@ -1016,7 +1019,7 @@ local function iterate_array(state, unused)
    -- Have we reached the end?
    if state.next_index >= state.length then return nil end
    -- Nope.
-   local element = LuaAvroValue()
+   local element = avro_value_t()
    local rc = state.value.iface.get_by_index(
       state.value.iface, state.value.self,
       state.next_index, element, nil
@@ -1033,7 +1036,7 @@ local function iterate_map(state, unused)
    if state.next_index >= state.length then return nil end
    -- Nope.
    local key = ffi.new(const_char_p_ptr)
-   local element = LuaAvroValue()
+   local element = avro_value_t()
    local rc = state.value.iface.get_by_index(
       state.value.iface, state.value.self,
       state.next_index, element, key
@@ -1135,25 +1138,9 @@ function Value_class:set_from_ast(ast)
    end
 end
 
-function Value_class:type()
-   return self.iface.get_type(self.iface, self.self)
-end
-
-function Value_class:hash()
-   return avro.avro_value_hash(self)
-end
-
 function Value_class:schema_name()
    local schema = self.iface.get_schema(self.iface, self.self)
    return ffi.string(avro.avro_schema_type_name(schema))
-end
-
-function Value_class:reset()
-   if self.iface.reset ~= nil then
-      self.iface.reset(self.iface, self.self)
-   else
-      error "No implementation for Value:reset()"
-   end
 end
 
 function Value_class:set_source(src)
@@ -1167,14 +1154,6 @@ end
 function Value_class:copy_from(src)
    local rc = avro.avro_value_copy(self, src)
    if rc ~= 0 then avro_error() end
-end
-
-function Value_class:to_json()
-   local rc = avro.avro_value_to_json(self, true, v_char_p)
-   if rc ~= 0 then avro_error() end
-   local result = ffi.string(v_char_p[0])
-   ffi.C.free(v_char_p[0])
-   return result
 end
 
 Value_mt.__tostring = Value_class.to_json
@@ -1191,25 +1170,6 @@ function Value_mt:__eq(other)
    return eq ~= 0
 end
 
-function Value_mt:__lt(other)
-   local cmp = avro.avro_value_cmp(self, other)
-   return cmp < 0
-end
-
-function Value_mt:__le(other)
-   local cmp = avro.avro_value_cmp(self, other)
-   return cmp <= 0
-end
-
-function Value_class:release()
-   if self.should_decref and self.self ~= nil then
-      avro.avro_value_decref(self)
-   end
-   self.iface = nil
-   self.self = nil
-   self.should_decref = false
-end
-
 --[==[
 -- UNCOMMENT THIS TO CHECK release() calls
 function Value_mt:__gc()
@@ -1220,7 +1180,6 @@ function Value_mt:__gc()
 end
 --]==]
 
-LuaAvroValue = ffi.metatype([[avro_value_t]], Value_mt)
 
 ------------------------------------------------------------------------
 -- ResolvedReaders
@@ -1229,7 +1188,7 @@ local ResolvedReader_class = {}
 local ResolvedReader_mt = { __index = ResolvedReader_class }
 
 function ResolvedReader_class:new_raw_value()
-   local value = LuaAvroValue()
+   local value = avro_value_t()
    local rc = avro.avro_resolved_reader_new_value(self.resolver, value)
    if rc ~= 0 then avro_error() end
    value.should_decref = true
@@ -1263,7 +1222,7 @@ local ResolvedWriter_mt = { __index = ResolvedWriter_class }
 local memory_reader = avro.avro_reader_memory(nil, 0)
 
 function ResolvedWriter_class:new_raw_value()
-   local value = LuaAvroValue()
+   local value = avro_value_t()
    local rc = avro.avro_resolved_writer_new_value(self.resolver, value)
    if rc ~= 0 then avro_error() end
    value.should_decref = true
@@ -1335,7 +1294,7 @@ end
 
 function DataInputFile_class:read_raw(value)
    if not value then
-      value = LuaAvroValue()
+      value = avro_value_t()
       local rc = avro.avro_generic_value_new(self.iface, value)
       if rc ~= 0 then avro_error() end
       value.should_decref = true
