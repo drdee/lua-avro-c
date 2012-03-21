@@ -141,11 +141,13 @@ do
       {children = A.array { A.link "test" }},
       {parent = A.union { A.null, A.link "test" }},
    }
+   local schema3 = A.array { A.double }
 
    --print(schema1)
    --print(schema2)
    assert(schema1 == schema2)
    assert(schema1:size() == 12)
+   assert(schema2:get("a") == schema3)
 
    assert(deepcompare(schema1:field_names(), {
       "i", "l", "e", "a", "m", "ipv4", "dest_ipv4", "ipv6",

@@ -352,6 +352,7 @@ function RecordSchema:new(name)
       schema_name=name,
       schema_type=ACC.RECORD,
       fields={},
+      fields_by_name={},
    }
    return setmetatable(obj, self.__mt)
 end
@@ -363,8 +364,13 @@ function RecordSchema:size()
    return #self.fields
 end
 
+function RecordSchema:get(field_name)
+   return self.fields_by_name[field_name]
+end
+
 function RecordSchema:add_field(name, schema)
    table.insert(self.fields, {[name]=schema})
+   self.fields_by_name[name] = schema
    self.json = nil
    self.raw = nil
 end
