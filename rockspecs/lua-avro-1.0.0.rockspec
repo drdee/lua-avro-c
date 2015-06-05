@@ -1,9 +1,9 @@
 package = "lua-avro"
-version = "0.7"
+version = "1.0.0"
 
 source = {
    url = "git://github.com/redjack/lua-avro-c.git",
-   tag = "0.7"
+   tag = "1.0.0",
 }
 
 description = {
@@ -27,17 +27,20 @@ build = {
    modules = {
       avro = "src/avro.lua",
       ["avro.constants"] = "src/avro/constants.lua",
+      ["avro.dkjson"] = "src/avro/dkjson.lua",
+      ["avro.schema"] = "src/avro/schema.lua",
       ["avro.wrapper"] = "src/avro/wrapper.lua",
       ["avro.c"] = "src/avro/c.lua",
-      ["avro.c.legacy"] = {
-         sources = {"src/avro/c/legacy.c"},
+      ["avro.legacy.avro"] = {
+         sources = {"src/avro/legacy/avro.c"},
          libraries = {"avro"},
          incdirs = {"$(AVRO_INCDIR)"},
          libdirs = {"$(AVRO_LIBDIR)"},
       },
-      ["avro.c.ffi"] = "src/avro/c/ffi.lua",
+      ["avro.ffi.avro"] = "src/avro/ffi/avro.lua",
       ["avro.test"] = "src/avro/test.lua",
       ["avro.tests.raw"] = "src/avro/tests/raw.lua",
+      ["avro.tests.schema"] = "src/avro/tests/schema.lua",
       ["avro.tests.wrapper"] = "src/avro/tests/wrapper.lua",
    },
 }
