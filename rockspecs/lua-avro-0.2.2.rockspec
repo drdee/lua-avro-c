@@ -9,7 +9,7 @@ source = {
 description = {
    summary = "Lua bindings for Avro C library",
    homepage = "http://git.redjack.com/fathom/lua-avro",
-   license = "Proprietary"
+   license = "MIT/X11"
 }
 
 dependencies = {
