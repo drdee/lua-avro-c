@@ -1,10 +1,9 @@
 -- -*- coding: utf-8 -*-
 ------------------------------------------------------------------------
--- Copyright © 2011, RedJack, LLC.
+-- Copyright © 2011-2015, RedJack, LLC.
 -- All rights reserved.
 --
--- Please see the LICENSE.txt file in this distribution for license
--- details.
+-- Please see the COPYING file in this distribution for license details.
 ------------------------------------------------------------------------
 
 local AC = require "avro.c"
@@ -72,9 +71,9 @@ function Schema:raw_schema()
    return self.raw
 end
 
-function Schema:new_raw_value()
+function Schema:new_raw_value(...)
    local raw = self:raw_schema()
-   return raw:new_raw_value()
+   return raw:new_raw_value(...)
 end
 
 function Schema:new_wrapped_value()
@@ -138,6 +137,10 @@ function PrimitiveSchema:default_wrapper_class()
    return self.__default_wrapper_class
 end
 
+function PrimitiveSchema:clone(clones)
+   return self
+end
+
 
 local PRIMITIVES = {}
 
@@ -190,6 +193,11 @@ function ArraySchema:default_wrapper_class()
    return class
 end
 
+function ArraySchema:clone(clones)
+   local item_clone = self.item_schema:clone(clones or {})
+   return ArraySchema:new(item_clone)
+end
+
 
 MapSchema = {}
 MapSchema.__mt = { __index=MapSchema }
@@ -219,6 +227,11 @@ function MapSchema:default_wrapper_class()
    local child_class = assert(child_schema:wrapper_class())
    class.__child_class = child_class
    return class
+end
+
+function MapSchema:clone()
+   local value_clone = self.value_schema:clone(clones or {})
+   return MapSchema:new(value_clone)
 end
 
 
@@ -269,6 +282,20 @@ function EnumSchema:default_wrapper_class()
    return AW.ScalarValue
 end
 
+function EnumSchema:clone(clones)
+   clones = clones or {}
+   if clones[self.schema_name] then
+      return clones[self.schema_name]
+   end
+
+   local schema = EnumSchema:new(self.schema_name)
+   clones[self.schema_name] = schema
+   for _, sym in ipairs(self.symbols) do
+      schema:add_symbol(sym)
+   end
+   return schema
+end
+
 
 ------------------------------------------------------------------------
 -- Fixeds
@@ -300,6 +327,17 @@ function FixedSchema:default_wrapper_class()
    return AW.ScalarValue
 end
 
+function FixedSchema:clone(clones)
+   clones = clones or {}
+   if clones[self.schema_name] then
+      return clones[self.schema_name]
+   end
+
+   local schema = FixedSchema:new(self.schema_name, self.fixed_size)
+   clones[self.schema_name] = schema
+   return schema
+end
+
 
 ------------------------------------------------------------------------
 -- Records
@@ -313,6 +351,7 @@ function RecordSchema:new(name)
       schema_name=name,
       schema_type=ACC.RECORD,
       fields={},
+      fields_by_name={},
    }
    return setmetatable(obj, self.__mt)
 end
@@ -324,8 +363,13 @@ function RecordSchema:size()
    return #self.fields
 end
 
+function RecordSchema:get(field_name)
+   return self.fields_by_name[field_name]
+end
+
 function RecordSchema:add_field(name, schema)
    table.insert(self.fields, {[name]=schema})
+   self.fields_by_name[name] = schema
    self.json = nil
    self.raw = nil
 end
@@ -367,6 +411,22 @@ function RecordSchema:default_wrapper_class()
    class.__real_indices = real_indices
    class.__field_names = self:field_names()
    return class
+end
+
+function RecordSchema:clone(clones)
+   clones = clones or {}
+   if clones[self.schema_name] then
+      return clones[self.schema_name]
+   end
+
+   local schema = RecordSchema:new(self.schema_name)
+   clones[self.schema_name] = schema
+   for _, field in ipairs(self.fields) do
+      local field_name, field_schema = next(field)
+      local field_clone = field_schema:clone(clones)
+      schema:add_field(field_name, field_clone)
+   end
+   return schema
 end
 
 function RecordSchema:field_names()
@@ -450,6 +510,16 @@ function UnionSchema:default_wrapper_class()
    return class
 end
 
+function UnionSchema:clone(clones)
+   clones = clones or {}
+   local schema = UnionSchema:new(self.schema_name)
+   for _, branch_schema in ipairs(self.branches) do
+      local branch_clone = branch_schema:clone(clones)
+      schema:add_branch(branch_clone)
+   end
+   return schema
+end
+
 
 ------------------------------------------------------------------------
 -- Construct a schema from JSON
@@ -492,9 +562,7 @@ local function parse_decoded_json(decoded, link_table)
 
    elseif decoded.type == "enum" then
       local name = assert(decoded.name, "No name for enum")
-      if link_table[name] then
-         error([[Already have a schema named "]]..name..[["]])
-      end
+      local old_schema = link_table[name]
 
       local schema = EnumSchema:new(name)
       link_table[name] = schema
@@ -506,19 +574,35 @@ local function parse_decoded_json(decoded, link_table)
          end
          schema:add_symbol(sym)
       end
+
+      if old_schema then
+         if schema == old_schema then
+            link_table[name] = old_schema
+            return old_schema
+         else
+            error([[Already have a schema named "]]..name..[["]])
+         end
+      end
       return schema
 
    elseif decoded.type == "fixed" then
       local name = assert(decoded.name, "No name for fixed")
-      if link_table[name] then
-         error([[Already have a schema named "]]..name..[["]])
-      end
+      local old_schema = link_table[name]
 
       local size = assert(decoded.size, "No size for fixed")
       if type(size) ~= "number" then
          error("Fixed size must be a number")
       end
       local schema = FixedSchema:new(name, size)
+
+      if old_schema then
+         if schema == old_schema then
+            link_table[name] = old_schema
+            return old_schema
+         else
+            error([[Already have a schema named "]]..name..[["]])
+         end
+      end
       link_table[name] = schema
       return schema
 
@@ -530,9 +614,7 @@ local function parse_decoded_json(decoded, link_table)
 
    elseif decoded.type == "record" then
       local name = assert(decoded.name, "No name for record")
-      if link_table[name] then
-         error([[Already have a schema named "]]..name..[["]])
-      end
+      local old_schema = link_table[name]
 
       local schema = RecordSchema:new(name)
       link_table[name] = schema
@@ -547,6 +629,15 @@ local function parse_decoded_json(decoded, link_table)
          local field_type = assert(field.type, "No type for record field")
          local field_schema = parse_decoded_json(field_type, link_table)
          schema:add_field(field_name, field_schema)
+      end
+
+      if old_schema then
+         if schema == old_schema then
+            link_table[name] = old_schema
+            return old_schema
+         else
+            error([[Already have a schema named "]]..name..[["]])
+         end
       end
       return schema
 

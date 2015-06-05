@@ -1,10 +1,9 @@
 -- -*- coding: utf-8 -*-
 ------------------------------------------------------------------------
--- Copyright © 2011, RedJack, LLC.
+-- Copyright © 2011-2015, RedJack, LLC.
 -- All rights reserved.
 --
--- Please see the LICENSE.txt file in this distribution for license
--- details.
+-- Please see the COPYING file in this distribution for license details.
 ------------------------------------------------------------------------
 
 local A = require "avro"
@@ -43,6 +42,9 @@ do
       local schema = A.Schema:new(json)
       local actual = schema:type()
       assert(actual == expected)
+
+      local clone = schema:clone()
+      assert(schema == clone)
    end
 
    local function test_prim(prim_type, expected)
@@ -138,14 +140,20 @@ do
       {children = A.array { A.link "test" }},
       {parent = A.union { A.null, A.link "test" }},
    }
+   local schema3 = A.array { A.double }
 
    --print(schema1)
    --print(schema2)
    assert(schema1 == schema2)
    assert(schema1:size() == 12)
+   assert(schema2:get("a") == schema3)
 
    assert(deepcompare(schema1:field_names(), {
       "i", "l", "e", "a", "m", "ipv4", "dest_ipv4", "ipv6",
       "u", "sub", "children", "parent",
    }))
+
+   local clone = schema1:clone()
+   assert(schema1 == clone)
+   assert(schema2 == clone)
 end

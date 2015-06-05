@@ -1,10 +1,9 @@
 /* -*- coding: utf-8 -*-
  * ----------------------------------------------------------------------
- * Copyright © 2010, RedJack, LLC.
+ * Copyright © 2010-2015, RedJack, LLC.
  * All rights reserved.
  *
- * Please see the LICENSE.txt file in this distribution for license
- * details.
+ * Please see the COPYING file in this distribution for license details.
  * ----------------------------------------------------------------------
  */
 
@@ -1261,6 +1260,20 @@ lua_avro_get_raw_schema(lua_State *L, int index)
 }
 
 
+static int
+l_new_raw_schema(lua_State *L)
+{
+    avro_schema_t  schema = lua_touserdata(L, 1);
+    if (schema == NULL) {
+        lua_pushliteral(L, "Cannot create NULL schema wrapper");
+        return lua_error(L);
+    }
+    lua_avro_push_schema(L, schema);
+    lua_pushlightuserdata(L, schema);
+    return 2;
+}
+
+
 /**
  * Creates a new AvroValue for the given schema.
  */
@@ -1276,9 +1289,20 @@ l_schema_new_raw_value(lua_State *L)
             return lua_error(L);
         }
     }
-    avro_value_t  value;
-    check(avro_generic_value_new(l_schema->iface, &value));
-    lua_avro_push_value(L, &value, true);
+
+    if (lua_gettop(L) >= 2) {
+        LuaAvroValue  *l_value = luaL_checkudata(L, 2, MT_AVRO_VALUE);
+        if (l_value->should_decref && l_value->value.self != NULL) {
+            avro_value_decref(&l_value->value);
+        }
+        check(avro_generic_value_new(l_schema->iface, &l_value->value));
+        l_value->should_decref = true;
+        lua_pushvalue(L, 2);
+    } else {
+        avro_value_t  value;
+        check(avro_generic_value_new(l_schema->iface, &value));
+        lua_avro_push_value(L, &value, true);
+    }
     return 1;
 }
 
@@ -1383,7 +1407,8 @@ l_schema_new(lua_State *L)
 
         lua_avro_push_schema(L, schema);
         avro_schema_decref(schema);
-        return 1;
+        lua_pushlightuserdata(L, schema);
+        return 2;
     }
 
     if (lua_isuserdata(L, 1)) {
@@ -1392,7 +1417,9 @@ l_schema_new(lua_State *L)
             if (lua_rawequal(L, -1, -2)) {
                 /* This is already a schema object, so just return it. */
                 lua_pop(L, 2);  /* remove both metatables */
-                return 1;
+                LuaAvroSchema  *l_schema = lua_touserdata(L, 1);
+                lua_pushlightuserdata(L, l_schema->schema);
+                return 2;
             }
         }
     }
@@ -1958,6 +1985,7 @@ static const luaL_Reg  mod_methods[] =
     {"ResolvedReader", l_resolved_reader_new},
     {"ResolvedWriter", l_resolved_writer_new},
     {"Schema", l_schema_new},
+    {"new_raw_schema", l_new_raw_schema},
     {"open", l_file_open},
     {"raw_decode_value", l_value_decode_raw},
     {"raw_encode_value", l_value_encode_raw},
@@ -1984,6 +2012,8 @@ luaopen_avro_legacy_avro(lua_State *L)
     lua_createtable(L, 0, sizeof(value_methods) / sizeof(luaL_reg) - 1);
     luaL_register(L, NULL, value_methods);
     lua_setfield(L, -2, "__index");
+    lua_pushboolean(L, true);
+    lua_setfield(L, -2, "is_raw_value");
     lua_pushcfunction(L, l_value_lt);
     lua_setfield(L, -2, "__lt");
     lua_pushcfunction(L, l_value_le);

@@ -1,10 +1,9 @@
 -- -*- coding: utf-8 -*-
 ------------------------------------------------------------------------
--- Copyright © 2011, RedJack, LLC.
+-- Copyright © 2011-2015, RedJack, LLC.
 -- All rights reserved.
 --
--- Please see the LICENSE.txt file in this distribution for license
--- details.
+-- Please see the COPYING file in this distribution for license details.
 ------------------------------------------------------------------------
 
 -- A LuaJIT FFI implementation of the Avro C bindings.
@@ -17,12 +16,17 @@ local ffi = require "ffi"
 
 local ACC = require "avro.constants"
 
+local avro = ffi.load("avro")
+local L = require "avro.legacy.avro"
+
 local assert = assert
+local getmetatable = getmetatable
 local error = error
 local ipairs = ipairs
 local next = next
 local pairs = pairs
 local print = print
+local setmetatable = setmetatable
 local string = string
 local table = table
 local tonumber = tonumber
@@ -30,8 +34,6 @@ local tostring = tostring
 local type = type
 
 module "avro.ffi.avro"
-
-local avro = ffi.load("avro")
 
 ffi.cdef [[
 void *malloc(size_t size);
@@ -182,11 +184,6 @@ struct avro_value_iface {
 -- Forward declarations
 
 ffi.cdef [[
-typedef struct LuaAvroSchema {
-    avro_schema_t  schema;
-    avro_value_iface_t  *iface;
-} LuaAvroSchema;
-
 typedef struct LuaAvroResolvedReader {
     avro_value_iface_t  *resolver;
 } LuaAvroResolvedReader;
@@ -211,7 +208,6 @@ typedef struct LuaAvroDataOutputFile {
 ]]
 
 local avro_schema_t = ffi.typeof([[avro_schema_t]])
-local LuaAvroSchema
 
 local avro_value_t = ffi.typeof([[avro_value_t]])
 local avro_value_t_ptr = ffi.typeof([[avro_value_t *]])
@@ -513,16 +509,30 @@ local memory_writer = avro.avro_writer_memory(nil, 0)
 local Schema_class = {}
 local Schema_mt = { __index = Schema_class }
 
-local function new_schema(schema)
-   return LuaAvroSchema(schema, nil)
+local function new_schema(self, legacy)
+   local result = {
+      self = ffi.cast([[avro_schema_t]], self),
+      legacy = legacy,
+      iface = nil,
+   }
+   return setmetatable(result, Schema_mt)
 end
 
-function Schema_class:new_raw_value()
+function new_raw_schema(schema)
+   local legacy, self = L.new_raw_schema(schema)
+   return new_schema(self, legacy)
+end
+
+function Schema_class:new_raw_value(value)
    if self.iface == nil then
-      self.iface = avro.avro_generic_class_from_schema(self.schema)
+      self.iface = avro.avro_generic_class_from_schema(self.self)
       if self.iface == nil then avro_error() end
    end
-   local value = LuaAvroValue()
+   if value ~= nil then
+      value:release()
+   else
+      value = LuaAvroValue()
+   end
    local rc = avro.avro_generic_value_new(self.iface, value)
    if rc ~= 0 then avro_error() end
    value.should_decref = true
@@ -530,62 +540,21 @@ function Schema_class:new_raw_value()
 end
 
 function Schema_class:raw()
-   return self.schema
+   return self.self
 end
 
 function Schema_class:type()
-   return self.schema[0].type
-end
-
-function Schema_mt:__gc()
-   if self.schema ~= nil then
-      avro.avro_schema_decref(self.schema)
-      self.schema = nil
-   end
-   if self.iface ~= nil then
-      if self.iface.decref_iface ~= nil then
-         self.iface.decref_iface(self.iface)
-      end
-      self.iface = nil
-   end
+   return self.self[0].type
 end
 
 function Schema(json)
-   if type(json) == "string" then
-      local schema
-
-      if json == "boolean" then
-         schema = avro.avro_schema_boolean()
-      elseif json == "bytes" then
-         schema = avro.avro_schema_bytes()
-      elseif json == "double" then
-         schema = avro.avro_schema_double()
-      elseif json == "float" then
-         schema = avro.avro_schema_float()
-      elseif json == "int" then
-         schema = avro.avro_schema_int()
-      elseif json == "long" then
-         schema = avro.avro_schema_long()
-      elseif json == "null" then
-         schema = avro.avro_schema_null()
-      elseif json == "string" then
-         schema = avro.avro_schema_string()
-      else
-         local json_len = #json
-         local schema_p = ffi.new(avro_schema_t_ptr)
-         local schema_error = ffi.new(avro_schema_error_t_ptr)
-         local rc = avro.avro_schema_from_json(json, json_len, schema_p, schema_error)
-         if rc ~= 0 then avro_error() end
-         schema = schema_p[0]
-      end
-
-      return new_schema(schema)
-   elseif ffi.istype(LuaAvroSchema, json) then
-      return json
+   if getmetatable(json) == Schema_mt then
+      return Schema_mt
+   else
+      local legacy, self = L.Schema(json)
+      return new_schema(self, legacy)
    end
 end
-
-LuaAvroSchema = ffi.metatype([[LuaAvroSchema]], Schema_mt)
 
 
 ------------------------------------------------------------------------
@@ -605,13 +574,19 @@ local v_size = ffi.new(size_t_ptr)
 local v_const_void_p = ffi.new(const_void_p_ptr)
 
 function raw_value(v_ud, should_decref)
-   local ud = ffi.cast(avro_value_t_ptr, v_ud)
    local self = LuaAvroValue()
+   self:set_raw_value(v_ud, should_decref)
+   return self
+end
+
+function Value_class:set_raw_value(ud, should_decref)
+   self:release()
    self.iface = ud.iface
    self.self = ud.self
    self.should_decref = should_decref or false
-   return self
 end
+
+Value_class.is_raw_value = true
 
 function Value_class:get(index)
    local value_type = self:type()
@@ -1269,8 +1244,8 @@ end
 
 function ResolvedReader(wschema, rschema)
    local resolver = LuaAvroResolvedReader()
-   wschema = wschema:raw_schema().schema
-   rschema = rschema:raw_schema().schema
+   wschema = wschema:raw_schema().self
+   rschema = rschema:raw_schema().self
    resolver.resolver = avro.avro_resolved_reader_new(wschema, rschema)
    if resolver.resolver == nil then return get_avro_error() end
    return resolver
@@ -1324,8 +1299,8 @@ end
 
 function ResolvedWriter(wschema, rschema)
    local resolver = LuaAvroResolvedWriter()
-   wschema = wschema:raw_schema().schema
-   rschema = rschema:raw_schema().schema
+   wschema = wschema:raw_schema().self
+   rschema = rschema:raw_schema().self
    resolver.resolver = avro.avro_resolved_writer_new(wschema, rschema)
    if resolver.resolver == nil then return get_avro_error() end
    local rc = avro.avro_resolved_writer_new_value(resolver.resolver, resolver.value)
@@ -1423,7 +1398,7 @@ function open(path, mode, schema)
 
    elseif mode == "w" then
       local writer = ffi.new(avro_file_writer_t_ptr)
-      schema = schema:raw_schema().schema
+      schema = schema:raw_schema().self
       local rc = avro.avro_file_writer_create(path, schema, writer)
       if rc ~= 0 then avro_error() end
       return LuaAvroDataOutputFile(writer[0])
