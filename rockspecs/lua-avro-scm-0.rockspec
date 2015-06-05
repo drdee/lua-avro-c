@@ -2,13 +2,13 @@ package = "lua-avro"
 version = "scm-0"
 
 source = {
-   url = "git@git.redjack.com:fathom/lua-avro.git",
+   url = "git://github.com/redjack/lua-avro-c.git",
    branch = "develop"
 }
 
 description = {
    summary = "Lua bindings for Avro C library",
-   homepage = "http://git.redjack.com/fathom/lua-avro",
+   homepage = "https://github.com/redjack/lua-avro",
    license = "MIT/X11"
 }
 
