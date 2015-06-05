@@ -1,9 +1,9 @@
 package = "lua-avro"
-version = "1.0.0"
+version = "1.0.1-1"
 
 source = {
    url = "git://github.com/redjack/lua-avro-c.git",
-   tag = "1.0.0",
+   tag = "1.0.1",
 }
 
 description = {
