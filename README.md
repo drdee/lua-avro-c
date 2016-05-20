@@ -15,6 +15,12 @@ $ sudo make install PREFIX=/usr/local
 We also provide [rockspecs](../rockspecs), so that you can install using
 [LuaRocks][].
 
+### OSX
+
+Using Homebrew, install the following dependencies
+* avro-c
+* jansson
+
 ## Usage
 
 There's unfortunately not much in the way of documentation just yet.  You can

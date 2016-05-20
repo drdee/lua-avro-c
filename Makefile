@@ -26,8 +26,8 @@ USE_LUAROCKS=1
 DESTDIR=
 PREFIX=/usr/local
 LUA_INCDIR=$(PREFIX)/include
-LUA_LIBDIR=$(PREFIX)/lib/lua/5.1
-LUA_SHAREDIR=$(PREFIX)/share/lua/5.1
+LUA_LIBDIR=$(PREFIX)/lib/lua/5.2
+LUA_SHAREDIR=$(PREFIX)/share/lua/5.2
 
 # Other configuration variables.  These will also be set by luarocks.
 

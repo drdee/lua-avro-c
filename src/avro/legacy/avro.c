@@ -779,7 +779,7 @@ l_value_set_from_ast(lua_State *L)
 
         case AVRO_ARRAY:
             {
-                size_t  elements = lua_objlen(L, 2);
+                size_t  elements = lua_rawlen(L, 2);
                 size_t  i;
 
                 check(avro_value_reset(value));
@@ -1999,7 +1999,7 @@ luaopen_avro_legacy_avro(lua_State *L)
     /* AvroSchema metatable */
 
     luaL_newmetatable(L, MT_AVRO_SCHEMA);
-    lua_createtable(L, 0, sizeof(schema_methods) / sizeof(luaL_reg) - 1);
+    lua_createtable(L, 0, sizeof(schema_methods) / sizeof(luaL_Reg) - 1);
     luaL_register(L, NULL, schema_methods);
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_schema_gc);
@@ -2009,7 +2009,7 @@ luaopen_avro_legacy_avro(lua_State *L)
     /* AvroValue metatable */
 
     luaL_newmetatable(L, MT_AVRO_VALUE);
-    lua_createtable(L, 0, sizeof(value_methods) / sizeof(luaL_reg) - 1);
+    lua_createtable(L, 0, sizeof(value_methods) / sizeof(luaL_Reg) - 1);
     luaL_register(L, NULL, value_methods);
     lua_setfield(L, -2, "__index");
     lua_pushboolean(L, true);
@@ -2032,7 +2032,7 @@ luaopen_avro_legacy_avro(lua_State *L)
     /* AvroResolvedReader metatable */
 
     luaL_newmetatable(L, MT_AVRO_RESOLVED_READER);
-    lua_createtable(L, 0, sizeof(resolved_reader_methods) / sizeof(luaL_reg) - 1);
+    lua_createtable(L, 0, sizeof(resolved_reader_methods) / sizeof(luaL_Reg) - 1);
     luaL_register(L, NULL, resolved_reader_methods);
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_resolved_reader_gc);
@@ -2042,7 +2042,7 @@ luaopen_avro_legacy_avro(lua_State *L)
     /* AvroResolvedWriter metatable */
 
     luaL_newmetatable(L, MT_AVRO_RESOLVED_WRITER);
-    lua_createtable(L, 0, sizeof(resolved_writer_methods) / sizeof(luaL_reg) - 1);
+    lua_createtable(L, 0, sizeof(resolved_writer_methods) / sizeof(luaL_Reg) - 1);
     luaL_register(L, NULL, resolved_writer_methods);
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_resolved_writer_gc);
@@ -2052,7 +2052,7 @@ luaopen_avro_legacy_avro(lua_State *L)
     /* AvroInputFile metatable */
 
     luaL_newmetatable(L, MT_AVRO_DATA_INPUT_FILE);
-    lua_createtable(L, 0, sizeof(input_file_methods) / sizeof(luaL_reg) - 1);
+    lua_createtable(L, 0, sizeof(input_file_methods) / sizeof(luaL_Reg) - 1);
     luaL_register(L, NULL, input_file_methods);
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_input_file_close);
@@ -2062,7 +2062,7 @@ luaopen_avro_legacy_avro(lua_State *L)
     /* AvroOutputFile metatable */
 
     luaL_newmetatable(L, MT_AVRO_DATA_OUTPUT_FILE);
-    lua_createtable(L, 0, sizeof(output_file_methods) / sizeof(luaL_reg) - 1);
+    lua_createtable(L, 0, sizeof(output_file_methods) / sizeof(luaL_Reg) - 1);
     luaL_register(L, NULL, output_file_methods);
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_output_file_close);
